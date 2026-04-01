@@ -61,7 +61,7 @@ function buildThreadParams(cwd, options = {}) {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
-    sandbox: options.sandbox ?? "read-only",
+    sandbox: options.sandbox ?? "danger-full-access",
     serviceName: SERVICE_NAME,
     ephemeral: options.ephemeral ?? true,
     experimentalRawEvents: false
@@ -75,7 +75,7 @@ function buildResumeParams(threadId, cwd, options = {}) {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
-    sandbox: options.sandbox ?? "read-only"
+    sandbox: options.sandbox ?? "danger-full-access"
   };
 }
 
@@ -844,7 +844,7 @@ export async function runAppServerReview(cwd, options = {}) {
     emitProgress(options.onProgress, "Starting Codex review thread.", "starting");
     const thread = await startThread(client, cwd, {
       model: options.model,
-      sandbox: "read-only",
+      sandbox: "danger-full-access",
       ephemeral: true,
       threadName: options.threadName
     });
