@@ -34,6 +34,9 @@
  *   onProgress: ProgressReporter | null
  * }} TurnCaptureState
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
@@ -691,6 +694,56 @@ export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) 
   };
 }
 
+/**
+ * Detect API-key-based authentication by reading ~/.codex/config.toml.
+ * Returns { loggedIn: true, detail } when the active model_provider defines
+ * an env_key and that environment variable is set, or falls back to checking
+ * OPENAI_API_KEY directly.
+ */
+function detectApiKeyAuth() {
+  try {
+    const configPath = path.join(os.homedir(), ".codex", "config.toml");
+    if (!fs.existsSync(configPath)) {
+      return null;
+    }
+    const toml = fs.readFileSync(configPath, "utf8");
+
+    // Find active model_provider
+    const providerMatch = toml.match(/^\s*model_provider\s*=\s*"([^"]+)"/m);
+    if (providerMatch) {
+      const provider = providerMatch[1];
+      // Find env_key under [model_providers.<provider>]
+      const sectionRe = new RegExp(
+        `\\[model_providers\\.${provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]([\\s\\S]*?)(?=\\n\\[|$)`
+      );
+      const section = toml.match(sectionRe);
+      if (section) {
+        const keyMatch = section[1].match(/^\s*env_key\s*=\s*"([^"]+)"/m);
+        if (keyMatch) {
+          const envKey = keyMatch[1];
+          if (process.env[envKey]) {
+            return {
+              loggedIn: true,
+              detail: `authenticated via ${provider} provider (${envKey})`
+            };
+          }
+        }
+      }
+    }
+
+    // Fallback: check OPENAI_API_KEY directly
+    if (process.env.OPENAI_API_KEY) {
+      return {
+        loggedIn: true,
+        detail: "authenticated via OPENAI_API_KEY"
+      };
+    }
+  } catch {
+    // Config parse failure — fall through to unauthenticated
+  }
+  return null;
+}
+
 export function getCodexLoginStatus(cwd) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
@@ -703,6 +756,11 @@ export function getCodexLoginStatus(cwd) {
 
   const result = runCommand("codex", ["login", "status"], { cwd });
   if (result.error) {
+    // OAuth check failed — try API key auth
+    const apiKeyAuth = detectApiKeyAuth();
+    if (apiKeyAuth) {
+      return { available: true, ...apiKeyAuth };
+    }
     return {
       available: true,
       loggedIn: false,
@@ -716,6 +774,12 @@ export function getCodexLoginStatus(cwd) {
       loggedIn: true,
       detail: result.stdout.trim() || "authenticated"
     };
+  }
+
+  // OAuth not logged in — try API key auth as fallback
+  const apiKeyAuth = detectApiKeyAuth();
+  if (apiKeyAuth) {
+    return { available: true, ...apiKeyAuth };
   }
 
   return {
