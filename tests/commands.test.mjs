@@ -79,7 +79,8 @@ test("continue is not exposed as a user-facing command", () => {
     "result.md",
     "review.md",
     "setup.md",
-    "status.md"
+    "status.md",
+    "transfer.md"
   ]);
 });
 
@@ -90,7 +91,16 @@ test("rescue command absorbs continue semantics", () => {
   const runtimeSkill = read("skills/codex-cli-runtime/SKILL.md");
 
   assert.match(rescue, /The final user-visible response must be Codex's output verbatim/i);
-  assert.match(rescue, /allowed-tools:\s*Bash\(node:\*\),\s*AskUserQuestion/);
+  assert.match(rescue, /allowed-tools:\s*Bash\(node:\*\),\s*AskUserQuestion,\s*Agent/);
+  // Regression for #234: `Skill(codex:rescue)` from the main agent recursed
+  // because rescue.md named the routing with ambiguous prose ("Route this
+  // request to the `codex:codex-rescue` subagent") while running under
+  // `context: fork` — forked general-purpose subagents do not expose the
+  // `Agent` tool, so the fork fell back to `Skill` and re-entered this
+  // command. Pin the explicit transport and the inline (no-fork) execution.
+  assert.match(rescue, /subagent_type: "codex:codex-rescue"/);
+  assert.match(rescue, /do not call `Skill\(codex:codex-rescue\)`/i);
+  assert.doesNotMatch(rescue, /^context:\s*fork\b/m);
   assert.match(rescue, /--background\|--wait/);
   assert.match(rescue, /--resume\|--fresh/);
   assert.match(rescue, /--model <model\|spark>/);
@@ -154,20 +164,25 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(readme, /uses the same review target selection as `\/codex:review`/i);
   assert.match(readme, /--base main challenge whether this was the right caching and retry design/);
   assert.match(readme, /### `\/codex:rescue`/);
+  assert.match(readme, /### `\/codex:transfer`/);
   assert.match(readme, /### `\/codex:status`/);
   assert.match(readme, /### `\/codex:result`/);
   assert.match(readme, /### `\/codex:cancel`/);
 });
 
-test("result and cancel commands are exposed as deterministic runtime entrypoints", () => {
+test("transfer, result, and cancel commands are exposed as deterministic runtime entrypoints", () => {
+  const transfer = read("commands/transfer.md");
   const result = read("commands/result.md");
   const cancel = read("commands/cancel.md");
   const resultHandling = read("skills/codex-result-handling/SKILL.md");
 
+  assert.match(transfer, /disable-model-invocation:\s*true/);
+  assert.match(transfer, /codex-companion\.mjs" transfer "\$ARGUMENTS"/);
+  assert.match(transfer, /codex resume <session-id>/);
   assert.match(result, /disable-model-invocation:\s*true/);
-  assert.match(result, /codex-companion\.mjs" result \$ARGUMENTS/);
+  assert.match(result, /codex-companion\.mjs" result "\$ARGUMENTS"/);
   assert.match(cancel, /disable-model-invocation:\s*true/);
-  assert.match(cancel, /codex-companion\.mjs" cancel \$ARGUMENTS/);
+  assert.match(cancel, /codex-companion\.mjs" cancel "\$ARGUMENTS"/);
   assert.match(resultHandling, /do not turn a failed or incomplete Codex run into a Claude-side implementation attempt/i);
   assert.match(resultHandling, /if Codex was never successfully invoked, do not generate a substitute answer at all/i);
 });
