@@ -11,7 +11,7 @@ they already have.
 
 - `/codex:review` for a normal read-only Codex review
 - `/codex:adversarial-review` for a steerable challenge review
-- `/codex:rescue`, `/codex:status`, `/codex:result`, and `/codex:cancel` to delegate work and manage background jobs
+- `/codex:rescue`, `/codex:transfer`, `/codex:status`, `/codex:result`, and `/codex:cancel` to delegate work, hand off sessions, and manage background jobs
 
 ## Requirements
 
@@ -162,6 +162,21 @@ Ask Codex to redesign the database connection to be more resilient.
 - if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
 - follow-up rescue requests can continue the latest Codex task in the repo
 
+### `/codex:transfer`
+
+Creates a persistent Codex thread from the current Claude Code session and prints a `codex resume <session-id>` command.
+
+Use it when you started a debugging or implementation conversation in Claude Code and want to continue that same context directly in Codex.
+
+Examples:
+
+```bash
+/codex:transfer
+/codex:transfer --source ~/.claude/projects/-Users-me-repo/<session-id>.jsonl
+```
+
+The plugin's existing `SessionStart` hook supplies the current transcript path automatically; `--source` is available as a manual override. The transfer uses Codex's external-agent session importer, so it follows the same conversion rules as importing Claude history in the Codex App and creates visible turns that can be continued in the App or TUI. The source must be under `~/.claude/projects`, and older Codex versions that do not expose session import must be upgraded before using this command.
+
 ### `/codex:status`
 
 Shows running and recent Codex jobs for the current repository.
@@ -259,7 +274,7 @@ If you want to change the default reasoning effort or the default model that get
 
 ```toml
 model = "gpt-5.4-mini"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 ```
 
 Your configuration will be picked up based on:

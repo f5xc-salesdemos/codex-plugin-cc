@@ -11,15 +11,17 @@ import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
     findLatestTaskThread,
+    getCodexAuthStatus,
     getCodexAvailability,
-    getCodexLoginStatus,
     getSessionRuntimeStatus,
+    importExternalAgentSession,
     interruptAppServerTurn,
     parseStructuredOutput,
     readOutputSchema,
     runAppServerReview,
     runAppServerTurn
   } from "./lib/codex.mjs";
+import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -78,6 +80,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -176,19 +179,19 @@ function firstMeaningfulLine(text, fallback) {
   return line ?? fallback;
 }
 
-function buildSetupReport(cwd, actionsTaken = []) {
+async function buildSetupReport(cwd, actionsTaken = []) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
-  const authStatus = getCodexLoginStatus(cwd);
+  const authStatus = await getCodexAuthStatus(cwd);
   const config = getConfig(workspaceRoot);
 
   const nextSteps = [];
   if (!codexStatus.available) {
     nextSteps.push("Install Codex with `npm install -g @openai/codex`.");
   }
-  if (codexStatus.available && !authStatus.loggedIn) {
+  if (codexStatus.available && !authStatus.loggedIn && authStatus.requiresOpenaiAuth) {
     nextSteps.push("Run `!codex login`.");
     nextSteps.push("If browser login is blocked, retry with `!codex login --device-auth` or `!codex login --with-api-key`.");
   }
@@ -202,14 +205,14 @@ function buildSetupReport(cwd, actionsTaken = []) {
     npm: npmStatus,
     codex: codexStatus,
     auth: authStatus,
-    sessionRuntime: getSessionRuntimeStatus(),
+    sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
     nextSteps
   };
 }
 
-function handleSetup(argv) {
+async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
     booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
@@ -231,7 +234,7 @@ function handleSetup(argv) {
     actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
   }
 
-  const finalReport = buildSetupReport(cwd, actionsTaken);
+  const finalReport = await buildSetupReport(cwd, actionsTaken);
   outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);
 }
 
@@ -241,17 +244,15 @@ function buildAdversarialReviewPrompt(context, focusText) {
     REVIEW_KIND: "Adversarial Review",
     TARGET_LABEL: context.target.label,
     USER_FOCUS: focusText || "No extra focus provided.",
+    REVIEW_COLLECTION_GUIDANCE: context.collectionGuidance,
     REVIEW_INPUT: context.content
   });
 }
 
-function ensureCodexReady(cwd) {
-  const authStatus = getCodexLoginStatus(cwd);
-  if (!authStatus.available) {
+function ensureCodexAvailable(cwd) {
+  const availability = getCodexAvailability(cwd);
+  if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
-  }
-  if (!authStatus.loggedIn) {
-    throw new Error("Codex CLI is not authenticated. Run `!codex login` and retry.");
   }
 }
 
@@ -290,6 +291,30 @@ function isActiveJobStatus(status) {
   return status === "queued" || status === "running";
 }
 
+function getCurrentClaudeSessionId() {
+  return process.env[SESSION_ID_ENV] ?? null;
+}
+
+function filterJobsForCurrentClaudeSession(jobs) {
+  const sessionId = getCurrentClaudeSessionId();
+  if (!sessionId) {
+    return jobs;
+  }
+  return jobs.filter((job) => job.sessionId === sessionId);
+}
+
+function findLatestResumableTaskJob(jobs) {
+  return (
+    jobs.find(
+      (job) =>
+        job.jobClass === "task" &&
+        job.threadId &&
+        job.status !== "queued" &&
+        job.status !== "running"
+    ) ?? null
+  );
+}
+
 async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
   const timeoutMs = Math.max(0, Number(options.timeoutMs) || DEFAULT_STATUS_WAIT_TIMEOUT_MS);
   const pollIntervalMs = Math.max(100, Number(options.pollIntervalMs) || DEFAULT_STATUS_POLL_INTERVAL_MS);
@@ -310,22 +335,28 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
 
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
+  const sessionId = getCurrentClaudeSessionId();
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
-  const activeTask = jobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
+  const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
+  const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
     throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
   }
 
-  const trackedTask = jobs.find((job) => job.jobClass === "task" && job.status === "completed" && job.threadId);
+  const trackedTask = findLatestResumableTaskJob(visibleJobs);
   if (trackedTask) {
     return { id: trackedTask.threadId };
+  }
+
+  if (sessionId) {
+    return null;
   }
 
   return findLatestTaskThread(workspaceRoot);
 }
 
 async function executeReviewRun(request) {
-  ensureCodexReady(request.cwd);
+  ensureCodexAvailable(request.cwd);
   ensureGitRepository(request.cwd);
 
   const target = resolveReviewTarget(request.cwd, {
@@ -429,7 +460,7 @@ async function executeReviewRun(request) {
 
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
-  ensureCodexReady(request.cwd);
+  ensureCodexAvailable(request.cwd);
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
@@ -582,6 +613,33 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
   };
 }
 
+function renderTransferResult(payload) {
+  const lines = [
+    "Transferred the Claude session into a Codex thread with visible turn history.",
+    `Codex session ID: ${payload.threadId}`,
+    `Resume in Codex: ${payload.resumeCommand}`
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+async function executeTransfer(cwd, options = {}) {
+  const sourcePath = resolveClaudeSessionPath(cwd, {
+    source: options.source
+  });
+  const result = await importExternalAgentSession(cwd, { sourcePath });
+  const payload = {
+    threadId: result.threadId,
+    resumeCommand: `codex resume ${result.threadId}`,
+    sourcePath,
+    sessionId: path.basename(sourcePath, ".jsonl")
+  };
+
+  return {
+    payload,
+    rendered: renderTransferResult(payload)
+  };
+}
+
 function readTaskPrompt(cwd, options, positionals) {
   if (options["prompt-file"]) {
     return fs.readFileSync(path.resolve(cwd, options["prompt-file"]), "utf8");
@@ -728,7 +786,7 @@ async function handleTask(argv) {
   });
 
   if (options.background) {
-    ensureCodexReady(cwd);
+    ensureCodexAvailable(cwd);
     requireTaskRequest(prompt, resumeLast);
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
@@ -762,6 +820,19 @@ async function handleTask(argv) {
       }),
     { json: options.json }
   );
+}
+
+async function handleTransfer(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "source"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const { payload, rendered } = await executeTransfer(cwd, {
+    source: options.source
+  });
+  outputCommandResult(payload, rendered, options.json);
 }
 
 async function handleTaskWorker(argv) {
@@ -862,17 +933,9 @@ function handleTaskResumeCandidate(argv) {
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const sessionId = process.env[SESSION_ID_ENV] ?? null;
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
-  const candidate =
-    jobs.find(
-      (job) =>
-        job.jobClass === "task" &&
-        job.threadId &&
-        job.status !== "queued" &&
-        job.status !== "running" &&
-        (!sessionId || job.sessionId === sessionId)
-    ) ?? null;
+  const sessionId = getCurrentClaudeSessionId();
+  const jobs = filterJobsForCurrentClaudeSession(sortJobsNewestFirst(listJobs(workspaceRoot)));
+  const candidate = findLatestResumableTaskJob(jobs);
 
   const payload = {
     available: Boolean(candidate),
@@ -905,7 +968,7 @@ async function handleCancel(argv) {
 
   const cwd = resolveCommandCwd(options);
   const reference = positionals[0] ?? "";
-  const { workspaceRoot, job } = resolveCancelableJob(cwd, reference);
+  const { workspaceRoot, job } = resolveCancelableJob(cwd, reference, { env: process.env });
   const existing = readStoredJob(workspaceRoot, job.id) ?? {};
   const threadId = existing.threadId ?? job.threadId ?? null;
   const turnId = existing.turnId ?? job.turnId ?? null;
@@ -967,7 +1030,7 @@ async function main() {
 
   switch (subcommand) {
     case "setup":
-      handleSetup(argv);
+      await handleSetup(argv);
       break;
     case "review":
       await handleReview(argv);
@@ -979,6 +1042,9 @@ async function main() {
       break;
     case "task":
       await handleTask(argv);
+      break;
+    case "transfer":
+      await handleTransfer(argv);
       break;
     case "task-worker":
       await handleTaskWorker(argv);
