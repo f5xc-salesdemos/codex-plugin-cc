@@ -1231,7 +1231,7 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
 
   try {
     return {
-      parsed: JSON.parse(rawOutput),
+      parsed: JSON.parse(stripCodeFence(rawOutput)),
       parseError: null,
       rawOutput,
       ...fallback
@@ -1244,6 +1244,21 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
       ...fallback
     };
   }
+}
+
+/**
+ * Not every gateway honors `outputSchema`. Some return the same JSON wrapped in a
+ * markdown fence, which is a formatting difference rather than a failed review,
+ * so unwrap it instead of discarding the result.
+ *
+ * @param {string} rawOutput
+ * @returns {string}
+ */
+function stripCodeFence(rawOutput) {
+  const match = String(rawOutput)
+    .trim()
+    .match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/i);
+  return match ? match[1] : rawOutput;
 }
 
 export function readOutputSchema(schemaPath) {

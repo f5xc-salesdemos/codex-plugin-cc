@@ -46,6 +46,14 @@ Verified on macOS 25.3.0, `codex-cli 0.145.0`, against the F5 LiteLLM gateway:
 | any review with `CODEX_COMPANION_SANDBOX=danger-full-access` | `danger-full-access` | yes |
 | `CODEX_COMPANION_SANDBOX=<invalid>` | — | hard error |
 
+**What read-only does and does not buy.** It prevents the reviewer from modifying the tree it
+is judging. It does **not** stop Codex from executing commands, reaching the network
+(`web_search = "live"` in `config.toml`), or reading anything the user can read. So it is not by
+itself sufficient for docs-control `REVIEWER-SPEC.md` invariant 3 (untrusted PR content must
+never be executed and secrets must never be exfiltrated). That invariant governs the CI reviewer,
+which faces third-party pull requests; this local layer reviews the engineer's own branch before
+a pull request exists. Do not describe read-only as satisfying invariant 3.
+
 The per-thread sandbox parameter overrides `sandbox_mode` in `~/.codex/config.toml`: with
 `sandbox_mode = "danger-full-access"` set globally, `codex exec --sandbox read-only` was still
 blocked from writing.

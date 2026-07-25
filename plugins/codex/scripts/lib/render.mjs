@@ -285,6 +285,75 @@ export function renderReviewResult(parsedResult, meta) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+export function renderReviewGate(gate) {
+  const lines = [
+    "# Codex Review Gate",
+    "",
+    `Iteration: ${gate.iteration} of ${gate.maxIterations}`,
+    `Decision: ${gate.done ? "done" : gate.escalate ? `escalate (${gate.reason})` : "keep going"}`,
+    `Repository suite: ${gate.suiteStatus}`,
+    ""
+  ];
+
+  if (gate.blocking.length > 0) {
+    lines.push("Blocking (confirmed, must be fixed):");
+    for (const entry of gate.blocking) {
+      lines.push(`- [${entry.fleetSeverity}] ${entry.title} (${entry.file}${formatLineRange(entry)}) — ${entry.reason}`);
+    }
+    lines.push("");
+  }
+
+  if (gate.reported.length > 0) {
+    lines.push("Reported (non-blocking):");
+    for (const entry of gate.reported) {
+      lines.push(`- [${entry.fleetSeverity}] ${entry.title} (${entry.file}${formatLineRange(entry)}) — ${entry.reason}`);
+    }
+    lines.push("");
+  }
+
+  if (gate.nits.length > 0) {
+    lines.push("Nits:");
+    for (const entry of gate.nits) {
+      lines.push(`- ${entry.title} (${entry.file}${formatLineRange(entry)})`);
+    }
+    if (gate.nitOverflow > 0) {
+      lines.push(`- plus ${gate.nitOverflow} similar items`);
+    }
+    lines.push("");
+  }
+
+  if (gate.dismissed.length > 0) {
+    lines.push("Dismissed (refuted — Codex was wrong):");
+    for (const entry of gate.dismissed) {
+      lines.push(`- ${entry.title} (${entry.file}${formatLineRange(entry)})`);
+      if (entry.evidence) {
+        lines.push(`  Evidence: ${entry.evidence}`);
+      }
+    }
+    lines.push("");
+  }
+
+  if (gate.humanFlags.length > 0) {
+    lines.push("Needs a human decision:");
+    for (const entry of gate.humanFlags) {
+      lines.push(`- ${entry.title} (${entry.file}${formatLineRange(entry)}) — ${entry.reason}`);
+    }
+    lines.push("");
+  }
+
+  if (gate.escalate) {
+    lines.push(
+      gate.reason === "max-iterations"
+        ? "Stopping: the iteration cap was reached with blocking findings outstanding. Hand them to a human."
+        : "Stopping: two consecutive iterations produced the same blocking findings. Hand them to a human."
+    );
+  } else if (gate.done) {
+    lines.push("No confirmed blocking findings remain.");
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
 export function renderNativeReviewResult(result, meta) {
   const stdout = result.stdout.trim();
   const stderr = result.stderr.trim();

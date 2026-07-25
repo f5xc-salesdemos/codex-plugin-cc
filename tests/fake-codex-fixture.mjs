@@ -220,6 +220,46 @@ function structuredReviewPayload(prompt) {
     });
   }
 
+  if (prompt.includes("adversarial document review")) {
+    if (BEHAVIOR === "adversarial-clean") {
+      return JSON.stringify({
+        verdict: "approve",
+        summary: "Ready to implement.",
+        findings: [],
+        next_steps: []
+      });
+    }
+
+    // Deliberately returned least-severe-first so ordering is actually exercised.
+    return JSON.stringify({
+      verdict: "needs-attention",
+      summary: "Not ready: rollback behavior is unspecified.",
+      findings: [
+        {
+          severity: "low",
+          title: "Vague rollout wording",
+          body: "The rollout section does not say who flips the flag.",
+          file: "spec.md",
+          line_start: 5,
+          line_end: 5,
+          confidence: 0.4,
+          recommendation: "Name the owner of the rollout step."
+        },
+        {
+          severity: "critical",
+          title: "Missing rollback path",
+          body: "The sweep is irreversible and no rollback is described.",
+          file: "spec.md",
+          line_start: 5,
+          line_end: 5,
+          confidence: 0.91,
+          recommendation: "Specify how a bad sweep is reverted."
+        }
+      ],
+      next_steps: ["Describe the rollback path before implementation starts."]
+    });
+  }
+
   if (BEHAVIOR === "invalid-json") {
     return "not valid json";
   }

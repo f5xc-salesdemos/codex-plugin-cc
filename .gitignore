@@ -148,3 +148,6 @@ vite.config.ts.timestamp-*
 
 output/
 plugins/codex/.generated/
+
+# Verified-review working artifacts (findings, verification evidence)
+.codex-review/
