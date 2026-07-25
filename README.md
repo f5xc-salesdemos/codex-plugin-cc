@@ -285,6 +285,26 @@ Your configuration will be picked up based on:
 
 Check out the Codex docs for more [configuration options](https://developers.openai.com/codex/config-reference).
 
+### Sandboxing
+
+Reviews and read-only tasks start their Codex thread with the `read-only` sandbox, so a review
+can never modify the tree it is judging. Only `/codex:rescue` with write access asks for
+`workspace-write`. The per-thread sandbox the plugin sends takes precedence over
+`sandbox_mode` in your `config.toml`.
+
+Some hosts cannot start an OS-level sandbox at all — a nested Linux container without
+`CAP_SYS_ADMIN` cannot mount devpts for bubblewrap, and no amount of plugin configuration
+changes that. On those hosts set `CODEX_COMPANION_SANDBOX` to run reviews without OS
+isolation:
+
+```bash
+export CODEX_COMPANION_SANDBOX=danger-full-access
+```
+
+Accepted values are `read-only`, `workspace-write`, and `danger-full-access`; anything else is
+a hard error. The variable only substitutes for `read-only`, so it can neither widen nor narrow
+a run that already asked for write access. Run `/codex:setup` to see the effective sandbox.
+
 ### Moving The Work Over To Codex
 
 Delegated tasks and any [stop gate](#what-does-the-review-gate-do) run can also be directly resumed inside Codex by running `codex resume` either with the specific session ID you received from running `/codex:result` or `/codex:status` or by selecting it from the list.

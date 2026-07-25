@@ -10,6 +10,7 @@ import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
+    DEFAULT_SANDBOX,
     findLatestTaskThread,
     getCodexAuthStatus,
     getCodexAvailability,
@@ -18,8 +19,10 @@ import {
     interruptAppServerTurn,
     parseStructuredOutput,
     readOutputSchema,
+    resolveSandbox,
     runAppServerReview,
-    runAppServerTurn
+    runAppServerTurn,
+    SANDBOX_OVERRIDE_ENV
   } from "./lib/codex.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
@@ -206,6 +209,11 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     codex: codexStatus,
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
+    sandbox: {
+      default: DEFAULT_SANDBOX,
+      override: process.env[SANDBOX_OVERRIDE_ENV]?.trim() || null,
+      effective: resolveSandbox(DEFAULT_SANDBOX)
+    },
     reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
     nextSteps
@@ -411,7 +419,7 @@ async function executeReviewRun(request) {
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
-    sandbox: "danger-full-access",
+    sandbox: DEFAULT_SANDBOX,
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
   });
@@ -488,7 +496,7 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
-    sandbox: request.write ? "workspace-write" : "danger-full-access",
+    sandbox: request.write ? "workspace-write" : DEFAULT_SANDBOX,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
