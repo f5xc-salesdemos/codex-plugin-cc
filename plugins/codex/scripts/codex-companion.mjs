@@ -10,6 +10,7 @@ import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
+    DEFAULT_SANDBOX,
     findLatestTaskThread,
     getCodexAuthStatus,
     getCodexAvailability,
@@ -18,8 +19,10 @@ import {
     interruptAppServerTurn,
     parseStructuredOutput,
     readOutputSchema,
+    resolveSandbox,
     runAppServerReview,
-    runAppServerTurn
+    runAppServerTurn,
+    SANDBOX_OVERRIDE_ENV
   } from "./lib/codex.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
@@ -53,8 +56,10 @@ import {
   SESSION_ID_ENV
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
+import { summarizeGate } from "./lib/review-triage.mjs";
 import {
   renderNativeReviewResult,
+  renderReviewGate,
   renderReviewResult,
   renderStoredJobResult,
   renderCancelReport,
@@ -79,6 +84,8 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
+      "  node scripts/codex-companion.mjs review-doc --file <path> [--kind <spec|plan>] [--model <model|spark>] [--json] [focus text]",
+      "  node scripts/codex-companion.mjs review-gate --findings <path> [--verifications <path>] [--iteration <n>] [--max-iterations <n>] [--previous-blocking <path>] [--suite-status <pass|fail|unknown>] [--json]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
@@ -206,6 +213,11 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     codex: codexStatus,
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
+    sandbox: {
+      default: DEFAULT_SANDBOX,
+      override: process.env[SANDBOX_OVERRIDE_ENV]?.trim() || null,
+      effective: resolveSandbox(DEFAULT_SANDBOX)
+    },
     reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
     nextSteps
@@ -246,6 +258,30 @@ function buildAdversarialReviewPrompt(context, focusText) {
     USER_FOCUS: focusText || "No extra focus provided.",
     REVIEW_COLLECTION_GUIDANCE: context.collectionGuidance,
     REVIEW_INPUT: context.content
+  });
+}
+
+const DOCUMENT_REVIEW_KINDS = new Map([
+  ["spec", { label: "Spec Review", noun: "spec" }],
+  ["plan", { label: "Plan Review", noun: "implementation plan" }]
+]);
+
+function resolveDocumentReviewKind(kind) {
+  const normalized = String(kind ?? "spec").trim().toLowerCase();
+  const resolved = DOCUMENT_REVIEW_KINDS.get(normalized);
+  if (!resolved) {
+    throw new Error(`--kind must be one of: ${[...DOCUMENT_REVIEW_KINDS.keys()].join(", ")}.`);
+  }
+  return resolved;
+}
+
+function buildDocumentReviewPrompt({ noun, documentPath, documentBody, focusText }) {
+  const template = loadPromptTemplate(ROOT_DIR, "document-review");
+  return interpolateTemplate(template, {
+    REVIEW_KIND: noun,
+    DOCUMENT_PATH: documentPath,
+    USER_FOCUS: focusText || "No extra focus provided.",
+    DOCUMENT_BODY: documentBody
   });
 }
 
@@ -411,7 +447,7 @@ async function executeReviewRun(request) {
   const result = await runAppServerTurn(context.repoRoot, {
     prompt,
     model: request.model,
-    sandbox: "danger-full-access",
+    sandbox: DEFAULT_SANDBOX,
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
   });
@@ -458,6 +494,78 @@ async function executeReviewRun(request) {
 }
 
 
+/**
+ * Reviews a written document (a spec or an implementation plan) instead of a diff.
+ *
+ * Deliberately does not call `ensureGitRepository`: a spec is often reviewed
+ * before any branch exists, and `resolveWorkspaceRoot` already falls back to the
+ * cwd outside a repository. The document is inlined into the prompt while `cwd`
+ * stays the repository root, so Codex can check the document's claims about the
+ * codebase with read-only tool calls.
+ */
+async function executeDocReviewRun(request) {
+  ensureCodexAvailable(request.cwd);
+
+  const documentBody = fs.readFileSync(request.documentPath, "utf8");
+  const relativePath = path.relative(request.cwd, request.documentPath) || path.basename(request.documentPath);
+  const prompt = buildDocumentReviewPrompt({
+    noun: request.noun,
+    documentPath: relativePath,
+    documentBody,
+    focusText: request.focusText
+  });
+
+  const result = await runAppServerTurn(request.cwd, {
+    prompt,
+    model: request.model,
+    sandbox: DEFAULT_SANDBOX,
+    outputSchema: readOutputSchema(REVIEW_SCHEMA),
+    onProgress: request.onProgress
+  });
+  const parsed = parseStructuredOutput(result.finalMessage, {
+    status: result.status,
+    failureMessage: result.error?.message ?? result.stderr
+  });
+
+  const payload = {
+    review: request.reviewLabel,
+    document: {
+      path: relativePath,
+      kind: request.kind
+    },
+    threadId: result.threadId,
+    codex: {
+      status: result.status,
+      stderr: result.stderr,
+      stdout: result.finalMessage,
+      reasoning: result.reasoningSummary
+    },
+    result: parsed.parsed,
+    rawOutput: parsed.rawOutput,
+    parseError: parsed.parseError,
+    reasoningSummary: result.reasoningSummary
+  };
+
+  return {
+    exitStatus: result.status,
+    threadId: result.threadId,
+    turnId: result.turnId,
+    payload,
+    rendered: renderReviewResult(parsed, {
+      reviewLabel: request.reviewLabel,
+      targetLabel: relativePath,
+      reasoningSummary: result.reasoningSummary
+    }),
+    summary:
+      parsed.parsed?.summary ??
+      parsed.parseError ??
+      firstMeaningfulLine(result.finalMessage, `${request.reviewLabel} finished.`),
+    jobTitle: `Codex ${request.reviewLabel}`,
+    jobClass: "review",
+    targetLabel: relativePath
+  };
+}
+
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
   ensureCodexAvailable(request.cwd);
@@ -488,7 +596,7 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
-    sandbox: request.write ? "workspace-write" : "danger-full-access",
+    sandbox: request.write ? "workspace-write" : DEFAULT_SANDBOX,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -757,6 +865,122 @@ async function handleReview(argv) {
     reviewName: "Review",
     validateRequest: validateNativeReviewRequest
   });
+}
+
+function readJsonArgument(cwd, value, label) {
+  const resolved = path.resolve(cwd, value);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`${label} not found: ${value}`);
+  }
+  try {
+    return JSON.parse(fs.readFileSync(resolved, "utf8"));
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Decides whether a review loop may stop. Kept in code rather than in skill
+ * prose so the severity mapping and the loop's exit conditions are testable.
+ * Exits non-zero on malformed input, so a broken pipeline never reads as clean.
+ */
+function handleReviewGate(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: [
+      "findings",
+      "verifications",
+      "iteration",
+      "max-iterations",
+      "previous-blocking",
+      "suite-status",
+      "cwd"
+    ],
+    booleanOptions: ["json"]
+  });
+
+  if (!options.findings) {
+    throw new Error("Provide the review findings with --findings <path>.");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const rawFindings = readJsonArgument(cwd, options.findings, "Findings file");
+  // Accept either a bare findings array or a whole review payload.
+  const findings = Array.isArray(rawFindings)
+    ? rawFindings
+    : rawFindings?.result?.findings ?? rawFindings?.findings;
+  if (!Array.isArray(findings)) {
+    throw new Error("Findings file must contain a findings array, or a review payload with result.findings.");
+  }
+
+  const verifications = options.verifications
+    ? readJsonArgument(cwd, options.verifications, "Verifications file")
+    : {};
+  const previousBlocking = options["previous-blocking"]
+    ? readJsonArgument(cwd, options["previous-blocking"], "Previous blocking file")
+    : undefined;
+
+  const suiteStatus = options["suite-status"];
+  if (suiteStatus && !["pass", "fail", "unknown"].includes(String(suiteStatus).toLowerCase())) {
+    throw new Error("--suite-status must be one of: pass, fail, unknown.");
+  }
+
+  const gate = summarizeGate(findings, verifications, {
+    iteration: options.iteration ? Number(options.iteration) : 1,
+    maxIterations: options["max-iterations"] ? Number(options["max-iterations"]) : undefined,
+    previousBlocking,
+    suiteStatus
+  });
+
+  outputCommandResult(gate, renderReviewGate(gate), options.json);
+}
+
+async function handleReviewDoc(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["file", "kind", "model", "cwd"],
+    booleanOptions: ["json", "background", "wait"],
+    aliasMap: {
+      f: "file",
+      m: "model"
+    }
+  });
+
+  if (!options.file) {
+    throw new Error("Provide the document to review with --file <path>.");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const { label: reviewLabel, noun } = resolveDocumentReviewKind(options.kind);
+  const documentPath = path.resolve(cwd, options.file);
+  if (!fs.existsSync(documentPath)) {
+    throw new Error(`Document not found: ${options.file}`);
+  }
+
+  const focusText = positionals.join(" ").trim();
+  const job = createCompanionJob({
+    prefix: "review",
+    kind: "review-doc",
+    title: `Codex ${reviewLabel}`,
+    workspaceRoot,
+    jobClass: "review",
+    summary: `${reviewLabel} ${path.relative(cwd, documentPath) || options.file}`
+  });
+
+  await runForegroundCommand(
+    job,
+    (progress) =>
+      executeDocReviewRun({
+        cwd,
+        documentPath,
+        kind: String(options.kind ?? "spec").trim().toLowerCase(),
+        reviewLabel,
+        noun,
+        model: options.model,
+        focusText,
+        onProgress: progress
+      }),
+    { json: options.json }
+  );
 }
 
 async function handleTask(argv) {
@@ -1039,6 +1263,12 @@ async function main() {
       await handleReviewCommand(argv, {
         reviewName: "Adversarial Review"
       });
+      break;
+    case "review-doc":
+      await handleReviewDoc(argv);
+      break;
+    case "review-gate":
+      handleReviewGate(argv);
       break;
     case "task":
       await handleTask(argv);

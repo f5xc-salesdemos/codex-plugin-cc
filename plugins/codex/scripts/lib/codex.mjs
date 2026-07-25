@@ -1,6 +1,7 @@
 /**
  * @typedef {import("./app-server-protocol").AppServerNotification} AppServerNotification
  * @typedef {import("./app-server-protocol").ReviewTarget} ReviewTarget
+ * @typedef {import("./app-server-protocol").SandboxMode} SandboxMode
  * @typedef {import("./app-server-protocol").ThreadItem} ThreadItem
  * @typedef {import("./app-server-protocol").ThreadResumeParams} ThreadResumeParams
  * @typedef {import("./app-server-protocol").ThreadStartParams} ThreadStartParams
@@ -51,6 +52,39 @@ const DEFAULT_CONTINUE_PROMPT =
 const EXTERNAL_AGENT_IMPORT_COMPLETED = "externalAgentConfig/import/completed";
 const EXTERNAL_AGENT_IMPORT_TIMEOUT_MS = 2 * 60 * 1000;
 
+/** @type {SandboxMode} */
+export const DEFAULT_SANDBOX = "read-only";
+export const SANDBOX_OVERRIDE_ENV = "CODEX_COMPANION_SANDBOX";
+/** @type {Set<SandboxMode>} */
+const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
+
+/**
+ * Reviews must never be able to write to the tree they are judging, so every
+ * thread defaults to `read-only`. Some hosts cannot start an OS sandbox at all
+ * (a nested Linux container without CAP_SYS_ADMIN cannot mount devpts for
+ * bubblewrap), and there is no way to fix that from JavaScript. On those hosts
+ * `CODEX_COMPANION_SANDBOX` names the constraint explicitly instead of silently
+ * running every user on every platform without isolation.
+ *
+ * The override only ever substitutes for `read-only`: a write-capable run keeps
+ * exactly the access it asked for, so this can neither widen nor narrow one.
+ *
+ * @param {SandboxMode} requested
+ * @returns {SandboxMode}
+ */
+export function resolveSandbox(requested) {
+  const override = /** @type {SandboxMode} */ (process.env[SANDBOX_OVERRIDE_ENV]?.trim());
+  if (!override) {
+    return requested;
+  }
+  if (!SANDBOX_MODES.has(override)) {
+    throw new Error(
+      `${SANDBOX_OVERRIDE_ENV} must be one of: ${[...SANDBOX_MODES].join(", ")}. Got "${override}".`
+    );
+  }
+  return requested === DEFAULT_SANDBOX ? override : requested;
+}
+
 function cleanCodexStderr(stderr) {
   return stderr
     .split(/\r?\n/)
@@ -65,7 +99,7 @@ function buildThreadParams(cwd, options = {}) {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
-    sandbox: options.sandbox ?? "danger-full-access",
+    sandbox: resolveSandbox(options.sandbox ?? DEFAULT_SANDBOX),
     serviceName: SERVICE_NAME,
     ephemeral: options.ephemeral ?? true
   };
@@ -78,7 +112,7 @@ function buildResumeParams(threadId, cwd, options = {}) {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
-    sandbox: options.sandbox ?? "danger-full-access"
+    sandbox: resolveSandbox(options.sandbox ?? DEFAULT_SANDBOX)
   };
 }
 
@@ -1009,7 +1043,7 @@ export async function runAppServerReview(cwd, options = {}) {
     emitProgress(options.onProgress, "Starting Codex review thread.", "starting");
     const thread = await startThread(client, cwd, {
       model: options.model,
-      sandbox: "danger-full-access",
+      sandbox: options.sandbox ?? DEFAULT_SANDBOX,
       ephemeral: true,
       threadName: options.threadName
     });
@@ -1197,7 +1231,7 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
 
   try {
     return {
-      parsed: JSON.parse(rawOutput),
+      parsed: JSON.parse(stripCodeFence(rawOutput)),
       parseError: null,
       rawOutput,
       ...fallback
@@ -1210,6 +1244,21 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
       ...fallback
     };
   }
+}
+
+/**
+ * Not every gateway honors `outputSchema`. Some return the same JSON wrapped in a
+ * markdown fence, which is a formatting difference rather than a failed review,
+ * so unwrap it instead of discarding the result.
+ *
+ * @param {string} rawOutput
+ * @returns {string}
+ */
+function stripCodeFence(rawOutput) {
+  const match = String(rawOutput)
+    .trim()
+    .match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/i);
+  return match ? match[1] : rawOutput;
 }
 
 export function readOutputSchema(schemaPath) {
