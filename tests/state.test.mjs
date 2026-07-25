@@ -9,7 +9,19 @@ import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, s
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();
-  const stateDir = resolveStateDir(workspace);
+  // This asserts the fallback, which only applies when CLAUDE_PLUGIN_DATA is absent.
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  delete process.env.CLAUDE_PLUGIN_DATA;
+  let stateDir;
+  try {
+    stateDir = resolveStateDir(workspace);
+  } finally {
+    if (previousPluginDataDir === undefined) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    }
+  }
 
   assert.equal(stateDir.startsWith(os.tmpdir()), true);
   assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
@@ -103,3 +115,4 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
       .sort()
   );
 });
+
