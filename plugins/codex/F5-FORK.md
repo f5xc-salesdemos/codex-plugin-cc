@@ -6,8 +6,9 @@ upstream release.
 
 ## Versioning
 
-Version numbers are fork-owned. `1.0.7` and later are F5 releases that do not correspond to an
-upstream tag. When syncing upstream, keep the fork version ahead of the upstream version so the
+Version numbers are fork-owned. `1.0.8` and later are F5 releases that do not correspond to an
+upstream tag. (`1.0.7` was bumped on a branch that was squashed into the `1.0.8` release and was
+never published.) When syncing upstream, keep the fork version ahead of the upstream version so the
 Claude Code installer always sees a newer release.
 
 **Every change that must reach installed plugins bumps the version in its own pull request.**
