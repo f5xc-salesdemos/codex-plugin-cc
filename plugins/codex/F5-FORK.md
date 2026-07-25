@@ -10,6 +10,11 @@ Version numbers are fork-owned. `1.0.7` and later are F5 releases that do not co
 upstream tag. When syncing upstream, keep the fork version ahead of the upstream version so the
 Claude Code installer always sees a newer release.
 
+**Every change that must reach installed plugins bumps the version in its own pull request.**
+The plugin cache is keyed by version, so merging a fix without a bump leaves the installer
+resolving to a directory that may already hold the pre-fix code — the change becomes
+undeliverable rather than merely delayed.
+
 ## Divergences from upstream
 
 ### Read-only review sandbox (`resolveSandbox`)
