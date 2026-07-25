@@ -298,7 +298,8 @@ export function renderReviewGate(gate) {
   if (gate.blocking.length > 0) {
     lines.push("Blocking (confirmed, must be fixed):");
     for (const entry of gate.blocking) {
-      lines.push(`- [${entry.fleetSeverity}] ${entry.title} (${entry.file}${formatLineRange(entry)}) — ${entry.reason}`);
+      const location = entry.file ? ` (${entry.file}${formatLineRange(entry)})` : "";
+      lines.push(`- [${entry.fleetSeverity}] ${entry.title}${location} — ${entry.reason}`);
     }
     lines.push("");
   }
@@ -322,10 +323,21 @@ export function renderReviewGate(gate) {
     lines.push("");
   }
 
+  if (gate.resolved?.length > 0) {
+    lines.push("Fixed (confirmed in an earlier iteration, now resolved):");
+    for (const entry of gate.resolved) {
+      lines.push(`- ${entry.title}`);
+      if (entry.evidence) {
+        lines.push(`  Evidence: ${entry.evidence}`);
+      }
+    }
+    lines.push("");
+  }
+
   if (gate.dismissed.length > 0) {
     lines.push("Dismissed (refuted — Codex was wrong):");
     for (const entry of gate.dismissed) {
-      lines.push(`- ${entry.title} (${entry.file}${formatLineRange(entry)})`);
+      lines.push(entry.file ? `- ${entry.title} (${entry.file}${formatLineRange(entry)})` : `- ${entry.title}`);
       if (entry.evidence) {
         lines.push(`  Evidence: ${entry.evidence}`);
       }
@@ -336,7 +348,8 @@ export function renderReviewGate(gate) {
   if (gate.humanFlags.length > 0) {
     lines.push("Needs a human decision:");
     for (const entry of gate.humanFlags) {
-      lines.push(`- ${entry.title} (${entry.file}${formatLineRange(entry)}) — ${entry.reason}`);
+      const location = entry.file ? ` (${entry.file}${formatLineRange(entry)})` : "";
+      lines.push(`- ${entry.title}${location} — ${entry.reason}`);
     }
     lines.push("");
   }

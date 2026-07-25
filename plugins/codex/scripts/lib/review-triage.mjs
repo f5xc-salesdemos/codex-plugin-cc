@@ -225,6 +225,7 @@ export function summarizeGate(findings, verifications = {}, options = {}) {
         humanFlag: !settled,
         evidence: verification?.evidence ?? verification?.testEvidence ?? null,
         status: settled ? String(verification.status).toUpperCase() : "CARRIED_FORWARD",
+        settledAs: settled ? (status === "REFUTED" ? "refuted" : "fixed") : null,
         blocking: !settled,
         reason: settled
           ? "carried forward from an earlier iteration and settled"
@@ -270,7 +271,8 @@ export function summarizeGate(findings, verifications = {}, options = {}) {
     nits: allNits.slice(0, MAX_NITS),
     nitOverflow: Math.max(0, allNits.length - MAX_NITS),
     humanFlags: [...classified, ...carriedForward].filter((entry) => entry.humanFlag),
-    dismissed: [...dismissed, ...carriedForward.filter((entry) => !entry.blocking)],
+    dismissed: [...dismissed, ...carriedForward.filter((entry) => entry.settledAs === "refuted")],
+    resolved: carriedForward.filter((entry) => entry.settledAs === "fixed"),
     blockingKeys,
     blockingTitles,
     suiteStatus,

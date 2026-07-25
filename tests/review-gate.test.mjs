@@ -194,3 +194,42 @@ test("parseStructuredOutput still reports genuinely unparseable output", () => {
   assert.equal(parsed.parsed, null);
   assert.ok(parsed.parseError);
 });
+
+test("a carried-forward finding that was fixed is not reported as refuted", () => {
+  const dir = makeTempDir();
+  writeJson(dir, "findings.json", []);
+  writeJson(dir, "verify.json", {
+    "src/session.js:3:Missing owner check": {
+      status: "CONFIRMED",
+      resolved: true,
+      testEvidence: "red before, green after"
+    }
+  });
+  writeJson(dir, "blocking.json", ["src/session.js:3:Missing owner check"]);
+
+  const result = run(
+    "node",
+    [
+      SCRIPT,
+      "review-gate",
+      "--findings",
+      "findings.json",
+      "--verifications",
+      "verify.json",
+      "--previous-blocking",
+      "blocking.json",
+      "--iteration",
+      "2",
+      "--suite-status",
+      "pass"
+    ],
+    { cwd: dir }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  // Codex was right and the defect was fixed. Calling that "refuted" would corrupt the
+  // signal the human uses to judge how much to trust the reviewer.
+  assert.doesNotMatch(result.stdout, /Dismissed \(refuted/i);
+  assert.match(result.stdout, /Fixed/i);
+  assert.doesNotMatch(result.stdout, /\(null\)/, "carried-forward entries have no file to render");
+});
