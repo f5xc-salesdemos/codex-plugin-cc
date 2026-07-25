@@ -94,11 +94,11 @@ Step 4 is the only sufficient check. Steps 1–3 are necessary but not sufficien
 
 ## Known upstream issues worth fixing
 
-- `npm test` is not hermetic against `CODEX_COMPANION_SESSION_ID` and `CLAUDE_PLUGIN_DATA`.
-  Running the suite inside a Claude Code session with this plugin enabled fails 4 tests,
-  because the plugin's own SessionStart hook exports both variables. CI is unaffected. Clear
-  them (`env -u CODEX_COMPANION_SESSION_ID -u CLAUDE_PLUGIN_DATA npm test`) or fix the tests to
-  isolate the environment.
+- ~~`npm test` is not hermetic against `CODEX_COMPANION_SESSION_ID` and
+  `CLAUDE_PLUGIN_DATA`.~~ **Fixed.** `npm test` now runs through `scripts/run-tests.mjs`, which
+  clears both variables so the suite and every command it spawns agree on the state directory.
+  Note that invoking `node --test tests/*.test.mjs` directly inside a Claude Code session still
+  fails those four tests — use `npm test`.
 - `parseStructuredOutput` is a bare `JSON.parse` and never validates against
   `schemas/review-output.schema.json`. Consumers must treat a missing or unrecognized
   `severity` as blocking rather than trusting the field to be present.
