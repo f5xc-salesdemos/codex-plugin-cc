@@ -39,9 +39,17 @@ fs.writeFileSync(process.env.FAKE_REVIEW_STATE, JSON.stringify({
   }
 }));
 process.stdout.write(JSON.stringify({
-  status: ${JSON.stringify(providerStatus)},
-  response: ${JSON.stringify(response)}
-}));
+  event: "step_update",
+  step_update: { step_type: "agent_response", text_delta: ${JSON.stringify(response)} }
+}) + "\\n");
+process.stdout.write(JSON.stringify({
+  event: "result",
+  result: {
+    status: ${JSON.stringify(providerStatus)},
+    response: ${JSON.stringify(response)},
+    structured_output: ${JSON.stringify(output)}
+  }
+}) + "\\n");
 `;
   writeExecutable(executable, source);
 }
@@ -87,8 +95,9 @@ test("document review runs the provider sandboxed, read-only, and without GitHub
   assert.ok(state.args.includes("--disable-slash-commands"));
   assert.deepEqual(
     state.args.slice(state.args.indexOf("--output-format"), state.args.indexOf("--output-format") + 2),
-    ["--output-format", "json"]
+    ["--output-format", "stream-json"]
   );
+  assert.ok(state.args.includes("--json-schema"));
   assert.ok(!state.args.includes("--dangerously-skip-permissions"));
   const prompt = state.args.at(-1);
   assert.match(prompt, /DOCUMENT_SENTINEL/);
@@ -157,7 +166,7 @@ test("review adapter fails closed when the provider envelope reports failure", (
   assert.match(result.stderr, /did not complete successfully.*FAILED/i);
 });
 
-test("review adapter accepts a fenced JSON response inside the provider envelope", () => {
+test("review adapter uses schema-validated output instead of fenced response text", () => {
   const cwd = makeTempDir();
   const binDir = makeTempDir();
   const stateFile = path.join(cwd, "state.json");
@@ -166,7 +175,7 @@ test("review adapter accepts a fenced JSON response inside the provider envelope
     binDir,
     APPROVAL,
     "SUCCESS",
-    `Here is the result:\n\n\`\`\`json\n${JSON.stringify(APPROVAL, null, 2)}\n\`\`\``
+    "```json\n{malformed conversational text}\n```"
   );
 
   const result = run("node", [SCRIPT, "document", "--file", "plan.md", "--kind", "plan"], {

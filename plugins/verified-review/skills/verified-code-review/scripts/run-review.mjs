@@ -141,36 +141,27 @@ function buildCodePrompt(options, cwd, schema) {
   };
 }
 
-function parseJsonOutput(raw) {
-  let text = raw.trim();
-  const fenced = text.match(/(?:^|\n)```(?:json)?[^\S\r\n]*(?:\r?\n)?([\s\S]*?)\r?\n?```(?:\s|$)/i);
-  if (fenced) {
-    text = fenced[1].trim();
-  }
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new Error(`Reviewer did not return valid JSON: ${error.message}`);
-  }
-}
-
 function parseProviderOutput(raw) {
-  let envelope;
-  try {
-    envelope = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Review provider did not return a valid JSON envelope: ${error.message}`);
+  const lines = raw.trim().split(/\r?\n/).filter(Boolean);
+  const events = lines.map((line, index) => {
+    try {
+      return JSON.parse(line);
+    } catch (error) {
+      throw new Error(`Review provider returned an invalid stream event at line ${index + 1}: ${error.message}`);
+    }
+  });
+  const results = events.filter((event) => event?.event === "result");
+  if (results.length !== 1 || !results[0].result || typeof results[0].result !== "object") {
+    throw new Error("Review provider returned no unique final result event.");
   }
-  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
-    throw new Error("Review provider returned an invalid JSON envelope.");
+  const result = results[0].result;
+  if (result.status !== "SUCCESS") {
+    throw new Error(`Review provider did not complete successfully (status: ${result.status ?? "missing"}).`);
   }
-  if (envelope.status !== "SUCCESS") {
-    throw new Error(`Review provider did not complete successfully (status: ${envelope.status ?? "missing"}).`);
+  if (!result.structured_output || typeof result.structured_output !== "object") {
+    throw new Error("Review provider returned no schema-validated structured output.");
   }
-  if (typeof envelope.response !== "string") {
-    throw new Error("Review provider returned no structured response.");
-  }
-  return parseJsonOutput(envelope.response);
+  return result.structured_output;
 }
 
 function requireString(value, label, allowEmpty = false) {
@@ -231,7 +222,9 @@ function invokeReviewer(prompt, cwd) {
     "plan",
     "--disable-slash-commands",
     "--output-format",
-    "json",
+    "stream-json",
+    "--json-schema",
+    SCHEMA_PATH,
     "--print-timeout",
     "25m",
     "--print",
