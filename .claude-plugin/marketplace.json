@@ -4,7 +4,7 @@
     "name": "OpenAI"
   },
   "metadata": {
-    "description": "Codex plugins to use in Claude Code for delegation and code review.",
+    "description": "Plugins for Codex delegation and verified code review in Claude Code.",
     "version": "1.0.8"
   },
   "plugins": [
@@ -16,6 +16,15 @@
         "name": "OpenAI"
       },
       "source": "./plugins/codex"
+    },
+    {
+      "name": "verified-review",
+      "description": "Review, verify, and gate specs, plans, and local code.",
+      "version": "1.0.8",
+      "author": {
+        "name": "F5 Sales Demo"
+      },
+      "source": "./plugins/verified-review"
     }
   ]
 }

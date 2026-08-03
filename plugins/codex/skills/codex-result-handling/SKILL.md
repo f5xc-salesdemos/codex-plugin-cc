@@ -17,6 +17,10 @@ When the helper returns Codex output:
 - For `codex:codex-rescue`, do not turn a failed or incomplete Codex run into a Claude-side implementation attempt. Report the failure and stop.
 - For `codex:codex-rescue`, if Codex was never successfully invoked, do not generate a substitute answer at all.
 - CRITICAL: After presenting review findings from `/codex:review`, `/codex:adversarial-review`, or `codex:codex-rescue`, STOP. Do not make any code changes. Do not fix any issues. You MUST explicitly ask the user which issues, if any, they want fixed before touching a single file. Auto-applying fixes from an unverified review is strictly forbidden, even if the fix is obvious.
-- The one exception is the `verified-code-review` skill, which may fix a finding without asking, and only when all three hold: the finding is `critical` or `high`, its verification pass marked it CONFIRMED against this codebase, and a test has been written that fails because of it. Medium, low, refuted, and unverified findings are reported and never auto-fixed. Outside that loop the rule above holds without exception.
+- The one exception is `verified-review:verified-code-review`, which may fix a finding without asking,
+  and only when all three hold: the finding is `critical` or `high`, its verification pass marked it
+  CONFIRMED against this codebase, and a test has been written that fails because of it. Medium, low,
+  refuted, and unverified findings are reported and never auto-fixed. Outside that loop the rule above
+  holds without exception.
 - If the helper reports malformed output or a failed Codex run, include the most actionable stderr lines and stop there instead of guessing.
 - If the helper reports that setup or authentication is required, direct the user to `/codex:setup` and do not improvise alternate auth flows.

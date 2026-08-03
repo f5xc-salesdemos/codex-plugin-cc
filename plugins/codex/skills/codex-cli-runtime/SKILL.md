@@ -37,7 +37,8 @@ Command selection:
 
 Safety rules:
 - Default to write-capable Codex work in `codex:codex-rescue` unless the user explicitly asks for read-only behavior.
-- Reviews never run through `task`. If a request is a review, it belongs to the `verified-code-review` skill, not to `codex:codex-rescue`.
+- Reviews never run through `task`. If a request is a verified review, it belongs to
+  `verified-review:verified-code-review`, not to `codex:codex-rescue`.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.

@@ -18,6 +18,7 @@ they already have.
 - **ChatGPT subscription (incl. Free) or OpenAI API key.**
   - Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
 - **Node.js 18.18 or later**
+- **Antigravity CLI (`agy`)** for the shared verified-review skill
 
 ## Install
 
@@ -71,6 +72,27 @@ One simple first run is:
 /codex:status
 /codex:result
 ```
+
+### Install the verified-review skill
+
+The `verified-review` plugin exposes the same `verified-code-review` skill source to Claude and Codex.
+Its public workflow is provider-neutral; the current adapter runs `agy` in sandboxed plan mode.
+
+In Claude Code, install it from the marketplace already added above:
+
+```bash
+/plugin install verified-review@openai-codex
+/reload-plugins
+```
+
+For Codex, add this repository checkout as a local marketplace and install the same plugin:
+
+```bash
+codex plugin marketplace add /path/to/codex-plugin-cc
+codex plugin add verified-review@f5-sales-demo-verified-review
+```
+
+Start a new Claude or Codex session after installation so the new skill is discovered.
 
 ## Usage
 

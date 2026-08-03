@@ -51,6 +51,30 @@ const TARGETS = [
     ]
   },
   {
+    file: "plugins/verified-review/.claude-plugin/plugin.json",
+    values: [
+      {
+        label: "version",
+        get: (json) => json.version,
+        set: (json, version) => {
+          json.version = version;
+        }
+      }
+    ]
+  },
+  {
+    file: "plugins/verified-review/.codex-plugin/plugin.json",
+    values: [
+      {
+        label: "version",
+        get: (json) => json.version,
+        set: (json, version) => {
+          json.version = version;
+        }
+      }
+    ]
+  },
+  {
     file: ".claude-plugin/marketplace.json",
     values: [
       {
@@ -63,9 +87,16 @@ const TARGETS = [
       },
       {
         label: "plugins[codex].version",
-        get: (json) => findMarketplacePlugin(json).version,
+        get: (json) => findMarketplacePlugin(json, "codex").version,
         set: (json, version) => {
-          findMarketplacePlugin(json).version = version;
+          findMarketplacePlugin(json, "codex").version = version;
+        }
+      },
+      {
+        label: "plugins[verified-review].version",
+        get: (json) => findMarketplacePlugin(json, "verified-review").version,
+        set: (json, version) => {
+          findMarketplacePlugin(json, "verified-review").version = version;
         }
       }
     ]
@@ -131,9 +162,9 @@ function requireObject(value, label) {
   }
 }
 
-function findMarketplacePlugin(json) {
-  const plugin = json.plugins?.find((entry) => entry?.name === "codex");
-  requireObject(plugin, ".claude-plugin/marketplace.json plugins[codex]");
+function findMarketplacePlugin(json, name) {
+  const plugin = json.plugins?.find((entry) => entry?.name === name);
+  requireObject(plugin, `.claude-plugin/marketplace.json plugins[${name}]`);
   return plugin;
 }
 

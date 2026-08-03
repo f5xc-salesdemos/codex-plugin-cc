@@ -1,0 +1,20 @@
+{
+  "name": "f5-sales-demo-verified-review",
+  "interface": {
+    "displayName": "F5 Sales Demo Verified Review"
+  },
+  "plugins": [
+    {
+      "name": "verified-review",
+      "source": {
+        "source": "local",
+        "path": "./plugins/verified-review"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
