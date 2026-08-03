@@ -24,7 +24,7 @@ const APPROVAL = {
   next_steps: []
 };
 
-function installFakeReviewer(binDir, output = APPROVAL) {
+function installFakeReviewer(binDir, output = APPROVAL, providerStatus = "SUCCESS") {
   const executable = path.join(binDir, process.platform === "win32" ? "agy.cmd" : "agy");
   const source = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -37,7 +37,10 @@ fs.writeFileSync(process.env.FAKE_REVIEW_STATE, JSON.stringify({
     REPO_SYNC_TOKEN: process.env.REPO_SYNC_TOKEN ?? null
   }
 }));
-process.stdout.write(${JSON.stringify(JSON.stringify(output))});
+process.stdout.write(JSON.stringify({
+  status: ${JSON.stringify(providerStatus)},
+  response: ${JSON.stringify(JSON.stringify(output))}
+}));
 `;
   writeExecutable(executable, source);
 }
@@ -81,6 +84,10 @@ test("document review runs the provider sandboxed, read-only, and without GitHub
     "plan"
   ]);
   assert.ok(state.args.includes("--disable-slash-commands"));
+  assert.deepEqual(
+    state.args.slice(state.args.indexOf("--output-format"), state.args.indexOf("--output-format") + 2),
+    ["--output-format", "json"]
+  );
   assert.ok(!state.args.includes("--dangerously-skip-permissions"));
   const prompt = state.args.at(-1);
   assert.match(prompt, /DOCUMENT_SENTINEL/);
@@ -131,4 +138,20 @@ test("review adapter fails closed on malformed structured output", () => {
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /structured review output|next_steps|summary/i);
+});
+
+test("review adapter fails closed when the provider envelope reports failure", () => {
+  const cwd = makeTempDir();
+  const binDir = makeTempDir();
+  const stateFile = path.join(cwd, "state.json");
+  fs.writeFileSync(path.join(cwd, "plan.md"), "# Plan\n");
+  installFakeReviewer(binDir, APPROVAL, "FAILED");
+
+  const result = run("node", [SCRIPT, "document", "--file", "plan.md", "--kind", "plan"], {
+    cwd,
+    env: reviewerEnv(binDir, stateFile)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /did not complete successfully.*FAILED/i);
 });

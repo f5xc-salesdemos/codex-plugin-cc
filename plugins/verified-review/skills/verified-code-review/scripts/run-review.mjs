@@ -154,6 +154,25 @@ function parseJsonOutput(raw) {
   }
 }
 
+function parseProviderOutput(raw) {
+  let envelope;
+  try {
+    envelope = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Review provider did not return a valid JSON envelope: ${error.message}`);
+  }
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+    throw new Error("Review provider returned an invalid JSON envelope.");
+  }
+  if (envelope.status !== "SUCCESS") {
+    throw new Error(`Review provider did not complete successfully (status: ${envelope.status ?? "missing"}).`);
+  }
+  if (typeof envelope.response !== "string") {
+    throw new Error("Review provider returned no structured response.");
+  }
+  return parseJsonOutput(envelope.response);
+}
+
 function requireString(value, label, allowEmpty = false) {
   if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
     throw new Error(`Structured review output has an invalid ${label}.`);
@@ -212,7 +231,7 @@ function invokeReviewer(prompt, cwd) {
     "plan",
     "--disable-slash-commands",
     "--output-format",
-    "text",
+    "json",
     "--print-timeout",
     "25m",
     "--print",
@@ -235,7 +254,7 @@ function invokeReviewer(prompt, cwd) {
   if (result.status !== 0) {
     throw new Error(result.stderr.trim() || `The review provider exited with status ${result.status}.`);
   }
-  return validateReviewResult(parseJsonOutput(result.stdout));
+  return validateReviewResult(parseProviderOutput(result.stdout));
 }
 
 function main() {
