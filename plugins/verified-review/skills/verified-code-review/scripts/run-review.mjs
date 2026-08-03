@@ -143,7 +143,7 @@ function buildCodePrompt(options, cwd, schema) {
 
 function parseJsonOutput(raw) {
   let text = raw.trim();
-  const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
+  const fenced = text.match(/(?:^|\n)```(?:json)?[^\S\r\n]*(?:\r?\n)?([\s\S]*?)\r?\n?```(?:\s|$)/i);
   if (fenced) {
     text = fenced[1].trim();
   }

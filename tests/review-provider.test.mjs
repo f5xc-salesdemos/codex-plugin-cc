@@ -24,8 +24,9 @@ const APPROVAL = {
   next_steps: []
 };
 
-function installFakeReviewer(binDir, output = APPROVAL, providerStatus = "SUCCESS") {
+function installFakeReviewer(binDir, output = APPROVAL, providerStatus = "SUCCESS", providerResponse = null) {
   const executable = path.join(binDir, process.platform === "win32" ? "agy.cmd" : "agy");
+  const response = providerResponse ?? JSON.stringify(output);
   const source = `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync(process.env.FAKE_REVIEW_STATE, JSON.stringify({
@@ -39,7 +40,7 @@ fs.writeFileSync(process.env.FAKE_REVIEW_STATE, JSON.stringify({
 }));
 process.stdout.write(JSON.stringify({
   status: ${JSON.stringify(providerStatus)},
-  response: ${JSON.stringify(JSON.stringify(output))}
+  response: ${JSON.stringify(response)}
 }));
 `;
   writeExecutable(executable, source);
@@ -154,4 +155,25 @@ test("review adapter fails closed when the provider envelope reports failure", (
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /did not complete successfully.*FAILED/i);
+});
+
+test("review adapter accepts a fenced JSON response inside the provider envelope", () => {
+  const cwd = makeTempDir();
+  const binDir = makeTempDir();
+  const stateFile = path.join(cwd, "state.json");
+  fs.writeFileSync(path.join(cwd, "plan.md"), "# Plan\n");
+  installFakeReviewer(
+    binDir,
+    APPROVAL,
+    "SUCCESS",
+    `Here is the result:\n\n\`\`\`json\n${JSON.stringify(APPROVAL, null, 2)}\n\`\`\``
+  );
+
+  const result = run("node", [SCRIPT, "document", "--file", "plan.md", "--kind", "plan"], {
+    cwd,
+    env: reviewerEnv(binDir, stateFile)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), APPROVAL);
 });
