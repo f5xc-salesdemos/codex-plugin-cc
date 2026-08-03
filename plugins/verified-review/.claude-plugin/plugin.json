@@ -1,0 +1,8 @@
+{
+  "name": "verified-review",
+  "version": "1.0.8",
+  "description": "Run verified code reviews through a replaceable review provider.",
+  "author": {
+    "name": "F5 Sales Demo"
+  }
+}

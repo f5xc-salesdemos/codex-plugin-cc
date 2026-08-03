@@ -1,0 +1,18 @@
+{
+  "name": "verified-review",
+  "version": "1.0.8",
+  "description": "Run verified code reviews through a replaceable review provider.",
+  "author": {
+    "name": "F5 Sales Demo"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Verified Review",
+    "shortDescription": "Review, verify, and gate changes.",
+    "longDescription": "Runs a provider-neutral review, verifies every finding against the repository, and gates the loop on evidence.",
+    "developerName": "F5 Sales Demo",
+    "category": "Developer Tools",
+    "capabilities": [],
+    "defaultPrompt": "Use $verified-code-review to review my current changes."
+  }
+}
