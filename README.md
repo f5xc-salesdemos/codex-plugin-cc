@@ -1,362 +1,108 @@
-# Codex plugin for Claude Code
+# Codex delegation plugin for Claude Code
 
-Use Codex from inside Claude Code for code reviews or to delegate tasks to Codex.
+Use Codex from Claude Code for complex implementation, debugging, investigation, and session handoff.
 
-This plugin is for Claude Code users who want an easy way to start using Codex from the workflow
-they already have.
-
-<video src="./docs/plugin-demo.webm" controls muted playsinline autoplay></video>
+This plugin intentionally does not provide code-review commands, review hooks, or review skills. The
+F5 sales-demo fleet routes semantic code review to Antigravity instead of Claude or Codex.
 
 ## What You Get
 
-- `/codex:review` for a normal read-only Codex review
-- `/codex:adversarial-review` for a steerable challenge review
-- `/codex:rescue`, `/codex:transfer`, `/codex:status`, `/codex:result`, and `/codex:cancel` to delegate work, hand off sessions, and manage background jobs
+- `/codex:rescue` delegates a substantial task to Codex.
+- `/codex:transfer` imports the current Claude session into a Codex thread.
+- `/codex:status`, `/codex:result`, and `/codex:cancel` manage delegated jobs.
+- `/codex:setup` checks the local Codex CLI and authentication state.
 
 ## Requirements
 
-- **ChatGPT subscription (incl. Free) or OpenAI API key.**
-  - Usage will contribute to your Codex usage limits. [Learn more](https://developers.openai.com/codex/pricing).
-- **Node.js 18.18 or later**
-- **Antigravity CLI (`agy`)** for the shared verified-review skill
+- Claude Code with plugin support
+- Codex CLI installed and authenticated
+- Node.js 18.18 or later
+
+Codex usage contributes to your Codex usage limits. Use the plugin for tasks that benefit from its
+deeper reasoning or implementation capabilities; keep routine automation in Antigravity.
 
 ## Install
 
-Add the marketplace in Claude Code:
+Add the marketplace and install the plugin in Claude Code:
 
-```bash
-/plugin marketplace add openai/codex-plugin-cc
-```
-
-Install the plugin:
-
-```bash
+```text
+/plugin marketplace add f5-sales-demo/codex-plugin-cc
 /plugin install codex@openai-codex
-```
-
-Reload plugins:
-
-```bash
 /reload-plugins
 ```
 
-Then run:
+Then check the runtime:
 
-```bash
+```text
 /codex:setup
 ```
 
-`/codex:setup` will tell you whether Codex is ready. If Codex is missing and npm is available, it can offer to install Codex for you.
-
-If you prefer to install Codex yourself, use:
-
-```bash
-npm install -g @openai/codex
-```
-
-If Codex is installed but not logged in yet, run:
-
-```bash
-!codex login
-```
-
-After install, you should see:
-
-- the slash commands listed below
-- the `codex:codex-rescue` subagent in `/agents`
-
-One simple first run is:
-
-```bash
-/codex:review --background
-/codex:status
-/codex:result
-```
-
-### Install the verified-review skill
-
-The `verified-review` plugin exposes the same `verified-code-review` skill source to Claude and Codex.
-Its public workflow is provider-neutral; the current adapter runs `agy` in sandboxed plan mode.
-
-In Claude Code, install it from the marketplace already added above:
-
-```bash
-/plugin install verified-review@openai-codex
-/reload-plugins
-```
-
-For Codex, add this repository checkout as a local marketplace and install the same plugin:
-
-```bash
-codex plugin marketplace add /path/to/codex-plugin-cc
-codex plugin add verified-review@f5-sales-demo-verified-review
-```
-
-Start a new Claude or Codex session after installation so the new skill is discovered.
+If Codex is not authenticated, run `!codex login` (or the device/API-key login variant appropriate
+for the environment).
 
 ## Usage
 
-### `/codex:review`
-
-Runs a normal Codex review on your current work. It gives you the same quality of code review as running `/review` inside Codex directly.
-
-> [!NOTE]
-> Code review especially for multi-file changes might take a while. It's generally recommended to run it in the background.
-
-Use it when you want:
-
-- a review of your current uncommitted changes
-- a review of your branch compared to a base branch like `main`
-
-Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/codex:adversarial-review`](#codexadversarial-review) when you want to challenge a specific decision or risk area.
-
-Examples:
-
-```bash
-/codex:review
-/codex:review --base main
-/codex:review --background
-```
-
-This command is read-only and will not perform any changes. When run in the background you can use [`/codex:status`](#codexstatus) to check on the progress and [`/codex:cancel`](#codexcancel) to cancel the ongoing task.
-
-### `/codex:adversarial-review`
-
-Runs a **steerable** review that questions the chosen implementation and design.
-
-It can be used to pressure-test assumptions, tradeoffs, failure modes, and whether a different approach would have been safer or simpler.
-
-It uses the same review target selection as `/codex:review`, including `--base <ref>` for branch review.
-It also supports `--wait` and `--background`. Unlike `/codex:review`, it can take extra focus text after the flags.
-
-Use it when you want:
-
-- a review before shipping that challenges the direction, not just the code details
-- review focused on design choices, tradeoffs, hidden assumptions, and alternative approaches
-- pressure-testing around specific risk areas like auth, data loss, rollback, race conditions, or reliability
-
-Examples:
-
-```bash
-/codex:adversarial-review
-/codex:adversarial-review --base main challenge whether this was the right caching and retry design
-/codex:adversarial-review --background look for race conditions and question the chosen approach
-```
-
-This command is read-only. It does not fix code.
-
-### `/codex:rescue`
-
-Hands a task to Codex through the `codex:codex-rescue` subagent.
-
-Use it when you want Codex to:
-
-- investigate a bug
-- try a fix
-- continue a previous Codex task
-- take a faster or cheaper pass with a smaller model
-
-> [!NOTE]
-> Depending on the task and the model you choose these tasks might take a long time and it's generally recommended to force the task to be in the background or move the agent to the background.
-
-It supports `--background`, `--wait`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
-
-Examples:
-
-```bash
-/codex:rescue investigate why the tests started failing
-/codex:rescue fix the failing test with the smallest safe patch
-/codex:rescue --resume apply the top fix from the last run
-/codex:rescue --model gpt-5.4-mini --effort medium investigate the flaky integration test
-/codex:rescue --model spark fix the issue quickly
-/codex:rescue --background investigate the regression
-```
-
-You can also just ask for a task to be delegated to Codex:
+### Delegate complex work
 
 ```text
-Ask Codex to redesign the database connection to be more resilient.
+/codex:rescue investigate the intermittent deployment failure and implement the verified root-cause fix
+/codex:rescue --background migrate this subsystem and update its focused tests
+/codex:rescue --model gpt-5.4-mini --effort medium diagnose this concurrency failure
 ```
 
-**Notes:**
+The rescue command uses the `codex:codex-rescue` subagent as a thin forwarder. If neither `--model`
+nor `--effort` is supplied, Codex chooses its configured defaults. The `spark` alias maps to
+`gpt-5.3-codex-spark`.
 
-- if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
-- if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
-- follow-up rescue requests can continue the latest Codex task in the repo
+Use `--resume` to continue the latest Codex task associated with the current Claude session, or
+`--fresh` to force a new thread:
 
-### `/codex:transfer`
+```text
+/codex:rescue --resume apply the next fix
+/codex:rescue --fresh investigate an unrelated failure
+```
 
-Creates a persistent Codex thread from the current Claude Code session and prints a `codex resume <session-id>` command.
+### Transfer a session
 
-Use it when you started a debugging or implementation conversation in Claude Code and want to continue that same context directly in Codex.
-
-Examples:
-
-```bash
+```text
 /codex:transfer
-/codex:transfer --source ~/.claude/projects/-Users-me-repo/<session-id>.jsonl
 ```
 
-The plugin's existing `SessionStart` hook supplies the current transcript path automatically; `--source` is available as a manual override. The transfer uses Codex's external-agent session importer, so it follows the same conversion rules as importing Claude history in the Codex App and creates visible turns that can be continued in the App or TUI. The source must be under `~/.claude/projects`, and older Codex versions that do not expose session import must be upgraded before using this command.
+The command imports the current Claude transcript into Codex and returns a session ID plus a
+`codex resume <session-id>` command.
 
-### `/codex:status`
+### Manage background jobs
 
-Shows running and recent Codex jobs for the current repository.
-
-Examples:
-
-```bash
+```text
 /codex:status
-/codex:status task-abc123
+/codex:status <job-id> --wait
+/codex:result <job-id>
+/codex:cancel <job-id>
 ```
 
-Use it to:
+Jobs are scoped to the current Claude session by default. Supplying an explicit job ID can address a
+known job from another session in the same workspace.
 
-- check progress on background work
-- see the latest completed job
-- confirm whether a task is still running
+## Runtime and sandboxing
 
-### `/codex:result`
+The first task lazily starts a shared Codex app-server broker for the workspace. Later commands reuse
+that broker. Session lifecycle hooks clean up jobs and the shared runtime when the Claude session ends.
 
-Shows the final stored Codex output for a finished job.
-When available, it also includes the Codex session ID so you can reopen that run directly in Codex with `codex resume <session-id>`.
+Read-only tasks use the `read-only` sandbox. Write-capable rescue tasks request `workspace-write`.
+`CODEX_COMPANION_SANDBOX` can replace the read-only sandbox on hosts that cannot start the normal OS
+sandbox; it never changes a write-capable task's requested access.
 
-Examples:
+## Development
 
 ```bash
-/codex:result
-/codex:result task-abc123
+npm install
+npm test
+npm run check-version
 ```
 
-### `/codex:cancel`
+`npm run prebuild` regenerates app-server protocol types from the installed Codex CLI, and
+`npm run build` validates the protocol wrapper with TypeScript.
 
-Cancels an active background Codex job.
+## License
 
-Examples:
-
-```bash
-/codex:cancel
-/codex:cancel task-abc123
-```
-
-### `/codex:setup`
-
-Checks whether Codex is installed and authenticated.
-If Codex is missing and npm is available, it can offer to install Codex for you.
-
-You can also use `/codex:setup` to manage the optional review gate.
-
-#### Enabling review gate
-
-```bash
-/codex:setup --enable-review-gate
-/codex:setup --disable-review-gate
-```
-
-When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted Codex review based on Claude's response. If that review finds issues, the stop is blocked so Claude can address them first.
-
-> [!WARNING]
-> The review gate can create a long-running Claude/Codex loop and may drain usage limits quickly. Only enable it when you plan to actively monitor the session.
-
-## Typical Flows
-
-### Review Before Shipping
-
-```bash
-/codex:review
-```
-
-### Hand A Problem To Codex
-
-```bash
-/codex:rescue investigate why the build is failing in CI
-```
-
-### Start Something Long-Running
-
-```bash
-/codex:adversarial-review --background
-/codex:rescue --background investigate the flaky test
-```
-
-Then check in with:
-
-```bash
-/codex:status
-/codex:result
-```
-
-## Codex Integration
-
-The Codex plugin wraps the [Codex app server](https://developers.openai.com/codex/app-server). It uses the global `codex` binary installed in your environment and [applies the same configuration](https://developers.openai.com/codex/config-basic).
-
-### Common Configurations
-
-If you want to change the default reasoning effort or the default model that gets used by the plugin, you can define that inside your user-level or project-level `config.toml`. For example to always use `gpt-5.4-mini` on `high` for a specific project you can add the following to a `.codex/config.toml` file at the root of the directory you started Claude in:
-
-```toml
-model = "gpt-5.4-mini"
-model_reasoning_effort = "high"
-```
-
-Your configuration will be picked up based on:
-
-- user-level config in `~/.codex/config.toml`
-- project-level overrides in `.codex/config.toml`
-- project-level overrides only load when the [project is trusted](https://developers.openai.com/codex/config-advanced#project-config-files-codexconfigtoml)
-
-Check out the Codex docs for more [configuration options](https://developers.openai.com/codex/config-reference).
-
-### Sandboxing
-
-Reviews and read-only tasks start their Codex thread with the `read-only` sandbox, so a review
-can never modify the tree it is judging. Only `/codex:rescue` with write access asks for
-`workspace-write`. The per-thread sandbox the plugin sends takes precedence over
-`sandbox_mode` in your `config.toml`.
-
-Some hosts cannot start an OS-level sandbox at all — a nested Linux container without
-`CAP_SYS_ADMIN` cannot mount devpts for bubblewrap, and no amount of plugin configuration
-changes that. On those hosts set `CODEX_COMPANION_SANDBOX` to run reviews without OS
-isolation:
-
-```bash
-export CODEX_COMPANION_SANDBOX=danger-full-access
-```
-
-Accepted values are `read-only`, `workspace-write`, and `danger-full-access`; anything else is
-a hard error. The variable only substitutes for `read-only`, so it can neither widen nor narrow
-a run that already asked for write access. Run `/codex:setup` to see the effective sandbox.
-
-### Moving The Work Over To Codex
-
-Delegated tasks and any [stop gate](#what-does-the-review-gate-do) run can also be directly resumed inside Codex by running `codex resume` either with the specific session ID you received from running `/codex:result` or `/codex:status` or by selecting it from the list.
-
-This way you can review the Codex work or continue the work there.
-
-## FAQ
-
-### Do I need a separate Codex account for this plugin?
-
-If you are already signed into Codex on this machine, that account should work immediately here too. This plugin uses your local Codex CLI authentication.
-
-If you only use Claude Code today and have not used Codex yet, you will also need to sign in to Codex with either a ChatGPT account or an API key. [Codex is available with your ChatGPT subscription](https://developers.openai.com/codex/pricing/), and [`codex login`](https://developers.openai.com/codex/cli/reference/#codex-login) supports both ChatGPT and API key sign-in. Run `/codex:setup` to check whether Codex is ready, and use `!codex login` if it is not.
-
-### Does the plugin use a separate Codex runtime?
-
-No. This plugin delegates through your local [Codex CLI](https://developers.openai.com/codex/cli/) and [Codex app server](https://developers.openai.com/codex/app-server/) on the same machine.
-
-That means:
-
-- it uses the same Codex install you would use directly
-- it uses the same local authentication state
-- it uses the same repository checkout and machine-local environment
-
-### Will it use the same Codex config I already have?
-
-Yes. If you already use Codex, the plugin picks up the same [configuration](#common-configurations).
-
-### Can I keep using my current API key or base URL setup?
-
-Yes. Because the plugin uses your local Codex CLI, your existing sign-in method and config still apply.
-
-If you need to point the built-in OpenAI provider at a different endpoint, set `openai_base_url` in your [Codex config](https://developers.openai.com/codex/config-advanced/#config-and-state-locations).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

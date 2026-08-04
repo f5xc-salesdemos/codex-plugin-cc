@@ -1,6 +1,5 @@
 /**
  * @typedef {import("./app-server-protocol").AppServerNotification} AppServerNotification
- * @typedef {import("./app-server-protocol").ReviewTarget} ReviewTarget
  * @typedef {import("./app-server-protocol").SandboxMode} SandboxMode
  * @typedef {import("./app-server-protocol").ThreadItem} ThreadItem
  * @typedef {import("./app-server-protocol").ThreadResumeParams} ThreadResumeParams
@@ -26,7 +25,6 @@
  *   activeSubagentTurns: Set<string>,
  *   completionTimer: ReturnType<typeof setTimeout> | null,
  *   lastAgentMessage: string,
- *   reviewText: string,
  *   reasoningSummary: string[],
  *   error: unknown,
  *   messages: Array<{ lifecycle: string, phase: string | null, text: string }>,
@@ -59,8 +57,7 @@ export const SANDBOX_OVERRIDE_ENV = "CODEX_COMPANION_SANDBOX";
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 
 /**
- * Reviews must never be able to write to the tree they are judging, so every
- * thread defaults to `read-only`. Some hosts cannot start an OS sandbox at all
+ * Tasks default to `read-only`. Some hosts cannot start an OS sandbox at all
  * (a nested Linux container without CAP_SYS_ADMIN cannot mount devpts for
  * bubblewrap), and there is no way to fix that from JavaScript. On those hosts
  * `CODEX_COMPANION_SANDBOX` names the constraint explicitly instead of silently
@@ -274,8 +271,6 @@ function registerThread(state, threadId, options = {}) {
 
 function describeStartedItem(state, item) {
   switch (item.type) {
-    case "enteredReviewMode":
-      return { message: `Reviewer started: ${item.review}`, phase: "reviewing" };
     case "commandExecution":
       return {
         message: `Running command: ${shorten(item.command, 96)}`,
@@ -326,8 +321,6 @@ function describeCompletedItem(state, item) {
           : `Collaboration tool ${item.tool} ${item.status}.`;
       return { message: summary, phase: "investigating" };
     }
-    case "exitedReviewMode":
-      return { message: "Reviewer finished.", phase: "finalizing" };
     default:
       return null;
   }
@@ -360,7 +353,6 @@ function createTurnCaptureState(threadId, options = {}) {
     activeSubagentTurns: new Set(),
     completionTimer: null,
     lastAgentMessage: "",
-    reviewText: "",
     reasoningSummary: [],
     error: null,
     messages: [],
@@ -476,20 +468,6 @@ function recordItem(state, item, lifecycle, threadId = null) {
           logBody: item.text
         });
       }
-    }
-    return;
-  }
-
-  if (item.type === "exitedReviewMode") {
-    state.reviewText = item.review ?? "";
-    if (lifecycle === "completed" && item.review) {
-      emitLogEvent(state.onProgress, {
-        message: "Review output captured.",
-        stderrMessage: null,
-        phase: "finalizing",
-        logTitle: "Review output",
-        logBody: item.review
-      });
     }
     return;
   }
@@ -951,7 +929,7 @@ export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) 
   return {
     mode: "direct",
     label: "direct startup",
-    detail: "No shared Codex runtime is active yet. The first review or task command will start one on demand.",
+    detail: "No shared Codex runtime is active yet. The first task command will start one on demand.",
     endpoint: null
   };
 }
@@ -1031,62 +1009,6 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
   } finally {
     await client?.close().catch(() => {});
   }
-}
-
-export async function runAppServerReview(cwd, options = {}) {
-  const availability = getCodexAvailability(cwd);
-  if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
-  }
-
-  return withAppServer(cwd, async (client) => {
-    emitProgress(options.onProgress, "Starting Codex review thread.", "starting");
-    const thread = await startThread(client, cwd, {
-      model: options.model,
-      sandbox: options.sandbox ?? DEFAULT_SANDBOX,
-      ephemeral: true,
-      threadName: options.threadName
-    });
-    const sourceThreadId = thread.thread.id;
-    emitProgress(options.onProgress, `Thread ready (${sourceThreadId}).`, "starting", {
-      threadId: sourceThreadId
-    });
-    const delivery = options.delivery ?? "inline";
-
-    const turnState = await captureTurn(
-      client,
-      sourceThreadId,
-      () =>
-        client.request("review/start", {
-          threadId: sourceThreadId,
-          delivery,
-          target: options.target
-        }),
-      {
-        onProgress: options.onProgress,
-        onResponse(response, state) {
-          if (response.reviewThreadId) {
-            state.threadIds.add(response.reviewThreadId);
-            if (delivery === "detached") {
-              state.threadId = response.reviewThreadId;
-            }
-          }
-        }
-      }
-    );
-
-    return {
-      status: buildResultStatus(turnState),
-      threadId: turnState.threadId,
-      sourceThreadId,
-      turnId: turnState.turnId,
-      reviewText: turnState.reviewText,
-      reasoningSummary: turnState.reasoningSummary,
-      turn: turnState.finalTurn,
-      error: turnState.error,
-      stderr: cleanCodexStderr(client.stderr)
-    };
-  });
 }
 
 export async function importExternalAgentSession(cwd, options = {}) {
@@ -1217,52 +1139,6 @@ export async function findLatestTaskThread(cwd) {
 
 export function buildPersistentTaskThreadName(prompt) {
   return buildTaskThreadName(prompt);
-}
-
-export function parseStructuredOutput(rawOutput, fallback = {}) {
-  if (!rawOutput) {
-    return {
-      parsed: null,
-      parseError: fallback.failureMessage ?? "Codex did not return a final structured message.",
-      rawOutput: rawOutput ?? "",
-      ...fallback
-    };
-  }
-
-  try {
-    return {
-      parsed: JSON.parse(stripCodeFence(rawOutput)),
-      parseError: null,
-      rawOutput,
-      ...fallback
-    };
-  } catch (error) {
-    return {
-      parsed: null,
-      parseError: error.message,
-      rawOutput,
-      ...fallback
-    };
-  }
-}
-
-/**
- * Not every gateway honors `outputSchema`. Some return the same JSON wrapped in a
- * markdown fence, which is a formatting difference rather than a failed review,
- * so unwrap it instead of discarding the result.
- *
- * @param {string} rawOutput
- * @returns {string}
- */
-function stripCodeFence(rawOutput) {
-  const match = String(rawOutput)
-    .trim()
-    .match(/^```(?:json)?\s*\n([\s\S]*?)\n?```$/i);
-  return match ? match[1] : rawOutput;
-}
-
-export function readOutputSchema(schemaPath) {
-  return readJsonFile(schemaPath);
 }
 
 export { DEFAULT_CONTINUE_PROMPT, TASK_THREAD_PREFIX };

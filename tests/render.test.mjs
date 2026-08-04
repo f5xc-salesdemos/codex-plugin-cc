@@ -1,59 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { renderReviewResult, renderStoredJobResult } from "../plugins/codex/scripts/lib/render.mjs";
+import { renderStoredJobResult, renderTaskResult } from "../plugins/codex/scripts/lib/render.mjs";
 
-test("renderReviewResult degrades gracefully when JSON is missing required review fields", () => {
-  const output = renderReviewResult(
-    {
-      parsed: {
-        verdict: "approve",
-        summary: "Looks fine."
-      },
-      rawOutput: JSON.stringify({
-        verdict: "approve",
-        summary: "Looks fine."
-      }),
-      parseError: null
-    },
-    {
-      reviewLabel: "Adversarial Review",
-      targetLabel: "working tree diff"
-    }
-  );
-
-  assert.match(output, /Codex returned JSON with an unexpected review shape\./);
-  assert.match(output, /Missing array `findings`\./);
-  assert.match(output, /Raw final message:/);
+test("renderTaskResult returns the Codex final response unchanged", () => {
+  assert.equal(renderTaskResult({ rawOutput: "Implemented the fix." }), "Implemented the fix.\n");
 });
 
-test("renderStoredJobResult prefers rendered output for structured review jobs", () => {
+test("renderStoredJobResult appends resumable session details", () => {
   const output = renderStoredJobResult(
     {
-      id: "review-123",
+      id: "task-123",
       status: "completed",
-      title: "Codex Adversarial Review",
-      jobClass: "review",
+      title: "Codex Task",
+      jobClass: "task",
       threadId: "thr_123"
     },
     {
       threadId: "thr_123",
-      rendered: "# Codex Adversarial Review\n\nTarget: working tree diff\nVerdict: needs-attention\n",
-      result: {
-        result: {
-          verdict: "needs-attention",
-          summary: "One issue.",
-          findings: [],
-          next_steps: []
-        },
-        rawOutput:
-          '{"verdict":"needs-attention","summary":"One issue.","findings":[],"next_steps":[]}'
-      }
+      result: { rawOutput: "Implemented the requested migration." }
     }
   );
 
-  assert.match(output, /^# Codex Adversarial Review/);
-  assert.doesNotMatch(output, /^\{/);
+  assert.match(output, /^Implemented the requested migration\./);
   assert.match(output, /Codex session ID: thr_123/);
   assert.match(output, /Resume in Codex: codex resume thr_123/);
 });

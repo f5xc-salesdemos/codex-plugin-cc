@@ -4,7 +4,7 @@ import process from "node:process";
 
 import { writeExecutable } from "./helpers.mjs";
 
-export function installFakeCodex(binDir, behavior = "review-ok") {
+export function installFakeCodex(binDir, behavior = "task-ok") {
   const statePath = path.join(binDir, "fake-codex-state.json");
   const scriptPath = path.join(binDir, "codex");
   const source = `#!/usr/bin/env node
@@ -180,106 +180,7 @@ function emitTurnCompletedLater(threadId, turnId, item, delayMs) {
   }, delayMs);
 }
 
-function nativeReviewText(target) {
-  if (target.type === "baseBranch") {
-    return "Reviewed changes against " + target.branch + ".\\nNo material issues found.";
-  }
-  if (target.type === "custom") {
-    return "Reviewed custom target.\\nNo material issues found.";
-  }
-  return "Reviewed uncommitted changes.\\nNo material issues found.";
-}
-
-function structuredReviewPayload(prompt) {
-  if (prompt.includes("adversarial software review")) {
-    if (BEHAVIOR === "adversarial-clean") {
-      return JSON.stringify({
-        verdict: "approve",
-        summary: "No material issues found.",
-        findings: [],
-        next_steps: []
-      });
-    }
-
-    return JSON.stringify({
-      verdict: "needs-attention",
-      summary: "One adversarial concern surfaced.",
-      findings: [
-        {
-          severity: "high",
-          title: "Missing empty-state guard",
-          body: "The change assumes data is always present.",
-          file: "src/app.js",
-          line_start: 4,
-          line_end: 6,
-          confidence: 0.87,
-          recommendation: "Handle empty collections before indexing."
-        }
-      ],
-      next_steps: ["Add an empty-state test."]
-    });
-  }
-
-  if (prompt.includes("adversarial document review")) {
-    if (BEHAVIOR === "adversarial-clean") {
-      return JSON.stringify({
-        verdict: "approve",
-        summary: "Ready to implement.",
-        findings: [],
-        next_steps: []
-      });
-    }
-
-    // Deliberately returned least-severe-first so ordering is actually exercised.
-    return JSON.stringify({
-      verdict: "needs-attention",
-      summary: "Not ready: rollback behavior is unspecified.",
-      findings: [
-        {
-          severity: "low",
-          title: "Vague rollout wording",
-          body: "The rollout section does not say who flips the flag.",
-          file: "spec.md",
-          line_start: 5,
-          line_end: 5,
-          confidence: 0.4,
-          recommendation: "Name the owner of the rollout step."
-        },
-        {
-          severity: "critical",
-          title: "Missing rollback path",
-          body: "The sweep is irreversible and no rollback is described.",
-          file: "spec.md",
-          line_start: 5,
-          line_end: 5,
-          confidence: 0.91,
-          recommendation: "Specify how a bad sweep is reverted."
-        }
-      ],
-      next_steps: ["Describe the rollback path before implementation starts."]
-    });
-  }
-
-  if (BEHAVIOR === "invalid-json") {
-    return "not valid json";
-  }
-
-  return JSON.stringify({
-    verdict: "approve",
-    summary: "No material issues found.",
-    findings: [],
-    next_steps: []
-  });
-}
-
 function taskPayload(prompt, resume) {
-  if (prompt.includes("<task>") && prompt.includes("Only review the work from the previous Claude turn.")) {
-    if (BEHAVIOR === "adversarial-clean") {
-      return "ALLOW: No blocking issues found in the previous turn.";
-    }
-    return "BLOCK: Missing empty-state guard in src/app.js:4-6.";
-  }
-
   if (resume || prompt.includes("Continue from the current thread state") || prompt.includes("follow up")) {
     return "Resumed the prior run.\\nFollow-up prompt accepted.";
   }
@@ -458,38 +359,6 @@ rl.on("line", (line) => {
         break;
       }
 
-      case "review/start": {
-        const thread = ensureThread(state, message.params.threadId);
-        let reviewThread = thread;
-        if (message.params.delivery === "detached") {
-          reviewThread = nextThread(state, thread.cwd, true);
-          send({ method: "thread/started", params: { thread: { id: reviewThread.id } } });
-        }
-        const turnId = nextTurnId(state);
-        send({ id: message.id, result: { turn: buildTurn(turnId), reviewThreadId: reviewThread.id } });
-        emitTurnCompleted(reviewThread.id, turnId, [
-          {
-            started: { type: "enteredReviewMode", id: turnId, review: "current changes" }
-          },
-          ...(BEHAVIOR === "with-reasoning"
-            ? [
-                {
-                  completed: {
-                    type: "reasoning",
-                    id: "reasoning_" + turnId,
-                    summary: [{ text: "Reviewed the changed files and checked the likely regression paths." }],
-                    content: []
-                  }
-                }
-              ]
-            : []),
-          {
-            completed: { type: "exitedReviewMode", id: turnId, review: nativeReviewText(message.params.target) }
-          }
-        ]);
-        break;
-      }
-
 	      case "turn/start": {
 	        const thread = ensureThread(state, message.params.threadId);
 	        const prompt = (message.params.input || [])
@@ -509,9 +378,10 @@ rl.on("line", (line) => {
 	        saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 
-        const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
-          ? structuredReviewPayload(prompt)
-          : taskPayload(prompt, thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state"));
+        const payload = taskPayload(
+          prompt,
+          thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state")
+        );
 
         if (
           BEHAVIOR === "with-subagent" ||

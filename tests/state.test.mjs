@@ -78,7 +78,6 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
     `${JSON.stringify(
       {
         version: 1,
-        config: { stopReviewGate: false },
         jobs
       },
       null,
@@ -89,7 +88,6 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
 
   saveState(workspace, {
     version: 1,
-    config: { stopReviewGate: false },
     jobs
   });
 
@@ -115,4 +113,3 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
       .sort()
   );
 });
-

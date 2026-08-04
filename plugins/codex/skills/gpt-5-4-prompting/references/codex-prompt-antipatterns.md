@@ -14,7 +14,7 @@ Better:
 
 ```xml
 <task>
-Review this change for material correctness and regression risks.
+Diagnose why this change causes the reported regression.
 </task>
 ```
 
@@ -74,11 +74,11 @@ Before finalizing, verify that the answer matches the observed evidence and task
 Bad:
 
 ```text
-Review this diff, fix the bug you find, update the docs, and suggest a roadmap.
+Diagnose this failure, implement the fix, update unrelated docs, and suggest a roadmap.
 ```
 
 Better:
-- Run review first.
+- Run diagnosis first.
 - Run a separate fix prompt if needed.
 - Use a third run for docs or roadmap work.
 

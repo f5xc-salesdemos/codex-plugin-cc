@@ -69,7 +69,7 @@ Avoid unrelated refactors or cleanup.
 </action_safety>
 ```
 
-## Root-Cause Review
+## Root-Cause Analysis
 
 ```xml
 <task>

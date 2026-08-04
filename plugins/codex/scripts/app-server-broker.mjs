@@ -9,15 +9,12 @@ import { parseArgs } from "./lib/args.mjs";
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./lib/app-server.mjs";
 import { parseBrokerEndpoint } from "./lib/broker-endpoint.mjs";
 
-const STREAMING_METHODS = new Set(["turn/start", "review/start", "thread/compact/start"]);
+const STREAMING_METHODS = new Set(["turn/start", "thread/compact/start"]);
 
 function buildStreamThreadIds(method, params, result) {
   const threadIds = new Set();
   if (params?.threadId) {
     threadIds.add(params.threadId);
-  }
-  if (method === "review/start" && result?.reviewThreadId) {
-    threadIds.add(result.reviewThreadId);
   }
   return threadIds;
 }

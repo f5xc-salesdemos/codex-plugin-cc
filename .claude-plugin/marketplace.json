@@ -4,27 +4,18 @@
     "name": "OpenAI"
   },
   "metadata": {
-    "description": "Plugins for Codex delegation and verified code review in Claude Code.",
-    "version": "1.0.8"
+    "description": "Codex delegation for complex implementation and reasoning tasks in Claude Code.",
+    "version": "1.0.9"
   },
   "plugins": [
     {
       "name": "codex",
-      "description": "Use Codex from Claude Code to review code or delegate tasks.",
-      "version": "1.0.8",
+      "description": "Delegate complex implementation and reasoning tasks from Claude Code to Codex.",
+      "version": "1.0.9",
       "author": {
         "name": "OpenAI"
       },
       "source": "./plugins/codex"
-    },
-    {
-      "name": "verified-review",
-      "description": "Review, verify, and gate specs, plans, and local code.",
-      "version": "1.0.8",
-      "author": {
-        "name": "F5 Sales Demo"
-      },
-      "source": "./plugins/verified-review"
     }
   ]
 }

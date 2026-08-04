@@ -14,9 +14,7 @@ function readFakeState(binDir) {
   return JSON.parse(fs.readFileSync(path.join(binDir, "fake-codex-state.json"), "utf8"));
 }
 
-// A repository with one committed file and one uncommitted edit, so every review
-// scope (working tree, branch, native) has something to look at.
-function makeReviewableRepo() {
+function makeRepo() {
   const repo = makeTempDir();
   initGitRepo(repo);
   fs.mkdirSync(path.join(repo, "src"));
@@ -27,36 +25,8 @@ function makeReviewableRepo() {
   return repo;
 }
 
-test("adversarial review runs Codex in a read-only sandbox", () => {
-  const repo = makeReviewableRepo();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir);
-
-  const result = run("node", [SCRIPT, "adversarial-review"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFakeState(binDir).lastThreadStart.sandbox, "read-only");
-});
-
-test("native review runs Codex in a read-only sandbox", () => {
-  const repo = makeReviewableRepo();
-  const binDir = makeTempDir();
-  installFakeCodex(binDir);
-
-  const result = run("node", [SCRIPT, "review"], {
-    cwd: repo,
-    env: buildEnv(binDir)
-  });
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFakeState(binDir).lastThreadStart.sandbox, "read-only");
-});
-
 test("a task without --write runs Codex in a read-only sandbox", () => {
-  const repo = makeReviewableRepo();
+  const repo = makeRepo();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
 
@@ -70,7 +40,7 @@ test("a task without --write runs Codex in a read-only sandbox", () => {
 });
 
 test("a task with --write keeps its workspace-write sandbox", () => {
-  const repo = makeReviewableRepo();
+  const repo = makeRepo();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
 
@@ -83,12 +53,12 @@ test("a task with --write keeps its workspace-write sandbox", () => {
   assert.equal(readFakeState(binDir).lastThreadStart.sandbox, "workspace-write");
 });
 
-test("CODEX_COMPANION_SANDBOX relaxes a read-only review for hosts that cannot sandbox", () => {
-  const repo = makeReviewableRepo();
+test("CODEX_COMPANION_SANDBOX relaxes a read-only task for hosts that cannot sandbox", () => {
+  const repo = makeRepo();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
 
-  const result = run("node", [SCRIPT, "adversarial-review"], {
+  const result = run("node", [SCRIPT, "task", "diagnose the failure"], {
     cwd: repo,
     env: { ...buildEnv(binDir), CODEX_COMPANION_SANDBOX: "danger-full-access" }
   });
@@ -98,7 +68,7 @@ test("CODEX_COMPANION_SANDBOX relaxes a read-only review for hosts that cannot s
 });
 
 test("CODEX_COMPANION_SANDBOX never rewrites a write-capable run", () => {
-  const repo = makeReviewableRepo();
+  const repo = makeRepo();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
 
@@ -112,11 +82,11 @@ test("CODEX_COMPANION_SANDBOX never rewrites a write-capable run", () => {
 });
 
 test("an unrecognized CODEX_COMPANION_SANDBOX value fails loudly", () => {
-  const repo = makeReviewableRepo();
+  const repo = makeRepo();
   const binDir = makeTempDir();
   installFakeCodex(binDir);
 
-  const result = run("node", [SCRIPT, "adversarial-review"], {
+  const result = run("node", [SCRIPT, "task", "diagnose the failure"], {
     cwd: repo,
     env: { ...buildEnv(binDir), CODEX_COMPANION_SANDBOX: "yolo" }
   });

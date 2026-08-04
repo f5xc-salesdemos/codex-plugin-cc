@@ -1,6 +1,6 @@
 ---
 name: gpt-5-4-prompting
-description: Internal guidance for composing Codex and GPT-5.4 prompts for coding, review, diagnosis, and research tasks inside the Codex Claude Code plugin
+description: Internal guidance for composing Codex and GPT-5.4 prompts for complex coding, diagnosis, and research tasks inside the Codex Claude Code plugin
 user-invocable: false
 ---
 
@@ -22,17 +22,16 @@ Default prompt recipe:
 - `<structured_output_contract>` or `<compact_output_contract>`: exact shape, ordering, and brevity requirements.
 - `<default_follow_through_policy>`: what Codex should do by default instead of asking routine questions.
 - `<verification_loop>` or `<completeness_contract>`: required for debugging, implementation, or risky fixes.
-- `<grounding_rules>` or `<citation_rules>`: required for review, research, or anything that could drift into unsupported claims.
+- `<grounding_rules>` or `<citation_rules>`: required for research or anything that could drift into unsupported claims.
 
 When to add blocks:
 - Coding or debugging: add `completeness_contract`, `verification_loop`, and `missing_context_gating`.
-- Review or adversarial review: add `grounding_rules`, `structured_output_contract`, and `dig_deeper_nudge`.
 - Research or recommendation tasks: add `research_mode` and `citation_rules`.
 - Write-capable tasks: add `action_safety` so Codex stays narrow and avoids unrelated refactors.
 
 How to choose prompt shape:
-- Use built-in `review` or `adversarial-review` commands when the job is reviewing local git changes. Those prompts already carry the review contract.
 - Use `task` when the task is diagnosis, planning, research, or implementation and you need to control the prompt more directly.
+- Do not compose code-review prompts for Codex. The fleet routes semantic review work to Antigravity.
 - Use `task --resume-last` for follow-up instructions on the same Codex thread. Send only the delta instruction instead of restating the whole prompt unless the direction changed materially.
 
 Working rules:
