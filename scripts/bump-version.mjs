@@ -51,30 +51,6 @@ const TARGETS = [
     ]
   },
   {
-    file: "plugins/verified-review/.claude-plugin/plugin.json",
-    values: [
-      {
-        label: "version",
-        get: (json) => json.version,
-        set: (json, version) => {
-          json.version = version;
-        }
-      }
-    ]
-  },
-  {
-    file: "plugins/verified-review/.codex-plugin/plugin.json",
-    values: [
-      {
-        label: "version",
-        get: (json) => json.version,
-        set: (json, version) => {
-          json.version = version;
-        }
-      }
-    ]
-  },
-  {
     file: ".claude-plugin/marketplace.json",
     values: [
       {
@@ -90,13 +66,6 @@ const TARGETS = [
         get: (json) => findMarketplacePlugin(json, "codex").version,
         set: (json, version) => {
           findMarketplacePlugin(json, "codex").version = version;
-        }
-      },
-      {
-        label: "plugins[verified-review].version",
-        get: (json) => findMarketplacePlugin(json, "verified-review").version,
-        set: (json, version) => {
-          findMarketplacePlugin(json, "verified-review").version = version;
         }
       }
     ]

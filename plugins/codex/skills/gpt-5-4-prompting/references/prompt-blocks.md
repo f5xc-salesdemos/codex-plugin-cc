@@ -91,7 +91,7 @@ If required context is absent, retrieve it with tools or state exactly what rema
 
 ### `grounding_rules`
 
-Use for review, research, or root-cause analysis.
+Use for research or root-cause analysis.
 
 ```xml
 <grounding_rules>
@@ -152,7 +152,7 @@ Prefer breadth first, then go deeper only where the evidence changes the recomme
 
 ### `dig_deeper_nudge`
 
-Use for review and adversarial inspection.
+Use for deep investigation when an initial hypothesis may be incomplete.
 
 ```xml
 <dig_deeper_nudge>

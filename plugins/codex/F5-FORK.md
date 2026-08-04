@@ -1,104 +1,56 @@
 # F5 fork notes
 
-`f5-sales-demo/codex-plugin-cc` is a fork of `openai/codex-plugin-cc`. This file records what
-diverges from upstream, why, and how to keep the fork syncable. Read it before merging an
-upstream release.
+`f5-sales-demo/codex-plugin-cc` is a fork of `openai/codex-plugin-cc`. This file records current
+divergences from upstream and should be checked before importing an upstream release.
 
 ## Versioning
 
-Version numbers are fork-owned. `1.0.8` and later are F5 releases that do not correspond to an
-upstream tag. (`1.0.7` was bumped on a branch that was squashed into the `1.0.8` release and was
-never published.) When syncing upstream, keep the fork version ahead of the upstream version so the
-Claude Code installer always sees a newer release.
+Version numbers are fork-owned. Every change that must reach installed plugins requires a version
+bump because the Claude Code plugin cache is keyed by version.
 
-**Every change that must reach installed plugins bumps the version in its own pull request.**
-The plugin cache is keyed by version, so merging a fix without a bump leaves the installer
-resolving to a directory that may already hold the pre-fix code — the change becomes
-undeliverable rather than merely delayed.
+## Fleet role
 
-## Divergences from upstream
+The fork exposes Codex only for complex implementation, debugging, investigation, and session
+handoff. It intentionally omits upstream code-review commands and stop-time review gates. The F5
+sales-demo fleet routes semantic review automation to Antigravity.
 
-### Read-only review sandbox (`resolveSandbox`)
+An upstream sync must not restore review commands, review hooks, review prompts, review schemas,
+or review skills.
 
-`plugins/codex/scripts/lib/codex.mjs` defaults every thread to the `read-only` sandbox and
-resolves an optional `CODEX_COMPANION_SANDBOX` override. `plugins/codex/scripts/codex-companion.mjs`
-and `runAppServerReview` pass `DEFAULT_SANDBOX` instead of the hardcoded `danger-full-access`.
+## Sandboxing
 
-This **restores** upstream's original behavior. Fork commit `59d2a85` had replaced `read-only`
-with `danger-full-access` globally to work around bubblewrap being unable to mount devpts in a
-nested Linux container. That fixed one Linux-container symptom by removing OS isolation for
-every user on every platform, and it silently falsified three "this command is read-only"
-statements in `README.md`. The env var names the environment constraint instead of hiding it,
-and only ever substitutes for `read-only` so it cannot widen or narrow a write-capable run.
+`plugins/codex/scripts/lib/codex.mjs` defaults tasks to the `read-only` sandbox and supports an
+optional `CODEX_COMPANION_SANDBOX` override for hosts that cannot start the normal OS sandbox. The
+override substitutes only for read-only runs; a write-capable task retains `workspace-write`.
 
-**Known gap:** the override was verified on macOS (Apple Seatbelt) only. macOS Seatbelt is not
-Linux bubblewrap, so the Linux nested-container path that motivates the override is
-**unverified**. If a container user reports a failure, reproduce it there and record the result
-here. Related upstream discussion: `openai/codex-plugin-cc#18`. Prefer upstreaming
-`resolveSandbox` over carrying it — upstream's own default was already `read-only`.
+| Path | Sandbox sent |
+| --- | --- |
+| `task` without `--write` | `read-only` |
+| `task --write` | `workspace-write` |
+| invalid override | hard error |
 
-Verified on macOS 25.3.0, `codex-cli 0.145.0`, against the F5 LiteLLM gateway:
+The per-thread sandbox parameter overrides `sandbox_mode` from the user configuration.
 
-| Path | Sandbox sent | Can write? |
-|---|---|---|
-| `adversarial-review`, `review`, `review-doc` | `read-only` | no (`touchedFiles: []`) |
-| `task` without `--write` | `read-only` | no |
-| `task --write` | `workspace-write` | yes |
-| any review with `CODEX_COMPANION_SANDBOX=danger-full-access` | `danger-full-access` | yes |
-| `CODEX_COMPANION_SANDBOX=<invalid>` | — | hard error |
+## Shared runtime
 
-**What read-only does and does not buy.** It prevents the reviewer from modifying the tree it
-is judging. It does **not** stop Codex from executing commands, reaching the network
-(`web_search = "live"` in `config.toml`), or reading anything the user can read. So it is not by
-itself sufficient for docs-control `REVIEWER-SPEC.md` invariant 3 (untrusted PR content must
-never be executed and secrets must never be exfiltrated). That invariant governs the CI reviewer,
-which faces third-party pull requests; this local layer reviews the engineer's own branch before
-a pull request exists. Do not describe read-only as satisfying invariant 3.
+The fork lazily starts and reuses one app-server broker per workspace. Session lifecycle hooks clean
+up jobs and the shared runtime. The fake Codex fixture records thread and turn parameters so tests
+can verify sandbox, model, effort, and persistence behavior.
 
-The per-thread sandbox parameter overrides `sandbox_mode` in `~/.codex/config.toml`: with
-`sandbox_mode = "danger-full-access"` set globally, `codex exec --sandbox read-only` was still
-blocked from writing.
+## Gateway compatibility
 
-### Test fixture records thread parameters
+Gateway credentials use the neutral `GATEWAY_TOKEN` and `GATEWAY_URL` names. Do not restore the
+deprecated F5-prefixed identifiers.
 
-`tests/fake-codex-fixture.mjs` records `state.lastThreadStart` and `state.lastThreadResume`
-(`cwd`, `model`, `sandbox`, `approvalPolicy`, `ephemeral`) and adds `outputSchema` to
-`state.lastTurnStart`. `sandbox` is a thread parameter, not a turn parameter, so without this
-no test can assert on it. Note the fixture's thread/start *response* uses a different shape
-(`{type: "readOnly"}`) — do not copy that when asserting on request parameters.
-
-## Gateway compatibility (F5 LiteLLM, `wire_api = "responses"`)
-
-Verified working against `https://f5ai.pd.f5net.com/openai/v1` with `model = gpt-5.6-sol`:
-
-- `turn/start` with `outputSchema` returns schema-conforming JSON (`parseError: null`).
-- `review/start` (the native reviewer) works, but produces markedly weaker output than
-  `adversarial-review` — on identical input it reported "no clear regression or actionable bug"
-  where the adversarial path found a high-severity authorization defect. Prefer
-  `adversarial-review` for anything that gates work.
-- `codex login status` reports "Not logged in" because auth comes from `OPENAI_API_KEY` via the
-  `litellm` provider in `config.toml`. `detectApiKeyAuth()` handles this; `/codex:setup`
-  correctly reports ready.
+Provider-backed API-key authentication may make `codex login status` report logged out even while
+the app server is ready. `detectApiKeyAuth()` handles that case for `/codex:setup`.
 
 ## After every merge to `main`
 
-The plugin cache is keyed by version, so a new skill or command will not load until the version
-changes **and** the install is refreshed:
+1. Run `npm run bump-version <next>` and `npm run check-version`.
+2. Update or reinstall `codex@openai-codex` from the marketplace.
+3. Confirm the installed path uses the new version.
+4. Verify the commands in a fresh Claude Code session.
 
-1. `npm run bump-version <next>` && `npm run check-version`
-2. `/plugin marketplace update openai-codex`, then update/reinstall `codex@openai-codex`
-3. Verify `installPath` in `~/.claude/plugins/installed_plugins.json` ends in the new version
-4. Verify the new skill or command appears in a **fresh** Claude Code session
-
-Step 4 is the only sufficient check. Steps 1–3 are necessary but not sufficient.
-
-## Known upstream issues worth fixing
-
-- ~~`npm test` is not hermetic against `CODEX_COMPANION_SESSION_ID` and
-  `CLAUDE_PLUGIN_DATA`.~~ **Fixed.** `npm test` now runs through `scripts/run-tests.mjs`, which
-  clears both variables so the suite and every command it spawns agree on the state directory.
-  Note that invoking `node --test tests/*.test.mjs` directly inside a Claude Code session still
-  fails those four tests — use `npm test`.
-- `parseStructuredOutput` is a bare `JSON.parse` and never validates against
-  `schemas/review-output.schema.json`. Consumers must treat a missing or unrecognized
-  `severity` as blocking rather than trusting the field to be present.
+The fleet's managed Claude installations should not install this plugin unless complex Codex
+delegation is explicitly required.

@@ -17,23 +17,16 @@ import {
     getSessionRuntimeStatus,
     importExternalAgentSession,
     interruptAppServerTurn,
-    parseStructuredOutput,
-    readOutputSchema,
     resolveSandbox,
-    runAppServerReview,
     runAppServerTurn,
     SANDBOX_OVERRIDE_ENV
   } from "./lib/codex.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
-import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
-  getConfig,
   listJobs,
-  setConfig,
   upsertJob,
   writeJobFile
 } from "./lib/state.mjs";
@@ -56,11 +49,7 @@ import {
   SESSION_ID_ENV
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
-import { summarizeGate } from "./lib/review-triage.mjs";
 import {
-  renderNativeReviewResult,
-  renderReviewGate,
-  renderReviewResult,
   renderStoredJobResult,
   renderCancelReport,
   renderJobStatusReport,
@@ -70,22 +59,16 @@ import {
 } from "./lib/render.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
-const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
 function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
-      "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs review-doc --file <path> [--kind <spec|plan>] [--model <model|spark>] [--json] [focus text]",
-      "  node scripts/codex-companion.mjs review-gate --findings <path> [--verifications <path>] [--iteration <n>] [--max-iterations <n>] [--previous-blocking <path>] [--suite-status <pass|fail|unknown>] [--json]",
+      "  node scripts/codex-companion.mjs setup [--json]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
@@ -192,8 +175,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
   const authStatus = await getCodexAuthStatus(cwd);
-  const config = getConfig(workspaceRoot);
-
   const nextSteps = [];
   if (!codexStatus.available) {
     nextSteps.push("Install Codex with `npm install -g @openai/codex`.");
@@ -201,9 +182,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   if (codexStatus.available && !authStatus.loggedIn && authStatus.requiresOpenaiAuth) {
     nextSteps.push("Run `!codex login`.");
     nextSteps.push("If browser login is blocked, retry with `!codex login --device-auth` or `!codex login --with-api-key`.");
-  }
-  if (!config.stopReviewGate) {
-    nextSteps.push("Optional: run `/codex:setup --enable-review-gate` to require a fresh review before stop.");
   }
 
   return {
@@ -218,7 +196,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
       override: process.env[SANDBOX_OVERRIDE_ENV]?.trim() || null,
       effective: resolveSandbox(DEFAULT_SANDBOX)
     },
-    reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
     nextSteps
   };
@@ -227,62 +204,14 @@ async function buildSetupReport(cwd, actionsTaken = []) {
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    booleanOptions: ["json"]
   });
 
-  if (options["enable-review-gate"] && options["disable-review-gate"]) {
-    throw new Error("Choose either --enable-review-gate or --disable-review-gate.");
-  }
-
   const cwd = resolveCommandCwd(options);
-  const workspaceRoot = resolveCommandWorkspace(options);
   const actionsTaken = [];
-
-  if (options["enable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", true);
-    actionsTaken.push(`Enabled the stop-time review gate for ${workspaceRoot}.`);
-  } else if (options["disable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", false);
-    actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
-  }
 
   const finalReport = await buildSetupReport(cwd, actionsTaken);
   outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);
-}
-
-function buildAdversarialReviewPrompt(context, focusText) {
-  const template = loadPromptTemplate(ROOT_DIR, "adversarial-review");
-  return interpolateTemplate(template, {
-    REVIEW_KIND: "Adversarial Review",
-    TARGET_LABEL: context.target.label,
-    USER_FOCUS: focusText || "No extra focus provided.",
-    REVIEW_COLLECTION_GUIDANCE: context.collectionGuidance,
-    REVIEW_INPUT: context.content
-  });
-}
-
-const DOCUMENT_REVIEW_KINDS = new Map([
-  ["spec", { label: "Spec Review", noun: "spec" }],
-  ["plan", { label: "Plan Review", noun: "implementation plan" }]
-]);
-
-function resolveDocumentReviewKind(kind) {
-  const normalized = String(kind ?? "spec").trim().toLowerCase();
-  const resolved = DOCUMENT_REVIEW_KINDS.get(normalized);
-  if (!resolved) {
-    throw new Error(`--kind must be one of: ${[...DOCUMENT_REVIEW_KINDS.keys()].join(", ")}.`);
-  }
-  return resolved;
-}
-
-function buildDocumentReviewPrompt({ noun, documentPath, documentBody, focusText }) {
-  const template = loadPromptTemplate(ROOT_DIR, "document-review");
-  return interpolateTemplate(template, {
-    REVIEW_KIND: noun,
-    DOCUMENT_PATH: documentPath,
-    USER_FOCUS: focusText || "No extra focus provided.",
-    DOCUMENT_BODY: documentBody
-  });
 }
 
 function ensureCodexAvailable(cwd) {
@@ -290,33 +219,6 @@ function ensureCodexAvailable(cwd) {
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
   }
-}
-
-function buildNativeReviewTarget(target) {
-  if (target.mode === "working-tree") {
-    return { type: "uncommittedChanges" };
-  }
-
-  if (target.mode === "branch") {
-    return { type: "baseBranch", branch: target.baseRef };
-  }
-
-  return null;
-}
-
-function validateNativeReviewRequest(target, focusText) {
-  if (focusText.trim()) {
-    throw new Error(
-      `\`/codex:review\` now maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex:adversarial-review ${focusText.trim()}\` for focused review instructions.`
-    );
-  }
-
-  const nativeTarget = buildNativeReviewTarget(target);
-  if (!nativeTarget) {
-    throw new Error("This `/codex:review` target is not supported by the built-in reviewer. Retry with `/codex:adversarial-review` for custom targeting.");
-  }
-
-  return nativeTarget;
 }
 
 function renderStatusPayload(report, asJson) {
@@ -391,181 +293,6 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   return findLatestTaskThread(workspaceRoot);
 }
 
-async function executeReviewRun(request) {
-  ensureCodexAvailable(request.cwd);
-  ensureGitRepository(request.cwd);
-
-  const target = resolveReviewTarget(request.cwd, {
-    base: request.base,
-    scope: request.scope
-  });
-  const focusText = request.focusText?.trim() ?? "";
-  const reviewName = request.reviewName ?? "Review";
-  if (reviewName === "Review") {
-    const reviewTarget = validateNativeReviewRequest(target, focusText);
-    const result = await runAppServerReview(request.cwd, {
-      target: reviewTarget,
-      model: request.model,
-      onProgress: request.onProgress
-    });
-    const payload = {
-      review: reviewName,
-      target,
-      threadId: result.threadId,
-      sourceThreadId: result.sourceThreadId,
-      codex: {
-        status: result.status,
-        stderr: result.stderr,
-        stdout: result.reviewText,
-        reasoning: result.reasoningSummary
-      }
-    };
-    const rendered = renderNativeReviewResult(
-      {
-        status: result.status,
-        stdout: result.reviewText,
-        stderr: result.stderr
-      },
-      { reviewLabel: reviewName, targetLabel: target.label, reasoningSummary: result.reasoningSummary }
-    );
-
-    return {
-      exitStatus: result.status,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      payload,
-      rendered,
-      summary: firstMeaningfulLine(result.reviewText, `${reviewName} completed.`),
-      jobTitle: `Codex ${reviewName}`,
-      jobClass: "review",
-      targetLabel: target.label
-    };
-  }
-
-  const context = collectReviewContext(request.cwd, target);
-  const prompt = buildAdversarialReviewPrompt(context, focusText);
-  const result = await runAppServerTurn(context.repoRoot, {
-    prompt,
-    model: request.model,
-    sandbox: DEFAULT_SANDBOX,
-    outputSchema: readOutputSchema(REVIEW_SCHEMA),
-    onProgress: request.onProgress
-  });
-  const parsed = parseStructuredOutput(result.finalMessage, {
-    status: result.status,
-    failureMessage: result.error?.message ?? result.stderr
-  });
-  const payload = {
-    review: reviewName,
-    target,
-    threadId: result.threadId,
-    context: {
-      repoRoot: context.repoRoot,
-      branch: context.branch,
-      summary: context.summary
-    },
-    codex: {
-      status: result.status,
-      stderr: result.stderr,
-      stdout: result.finalMessage,
-      reasoning: result.reasoningSummary
-    },
-    result: parsed.parsed,
-    rawOutput: parsed.rawOutput,
-    parseError: parsed.parseError,
-    reasoningSummary: result.reasoningSummary
-  };
-
-  return {
-    exitStatus: result.status,
-    threadId: result.threadId,
-    turnId: result.turnId,
-    payload,
-    rendered: renderReviewResult(parsed, {
-      reviewLabel: reviewName,
-      targetLabel: context.target.label,
-      reasoningSummary: result.reasoningSummary
-    }),
-    summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
-    jobTitle: `Codex ${reviewName}`,
-    jobClass: "review",
-    targetLabel: context.target.label
-  };
-}
-
-
-/**
- * Reviews a written document (a spec or an implementation plan) instead of a diff.
- *
- * Deliberately does not call `ensureGitRepository`: a spec is often reviewed
- * before any branch exists, and `resolveWorkspaceRoot` already falls back to the
- * cwd outside a repository. The document is inlined into the prompt while `cwd`
- * stays the repository root, so Codex can check the document's claims about the
- * codebase with read-only tool calls.
- */
-async function executeDocReviewRun(request) {
-  ensureCodexAvailable(request.cwd);
-
-  const documentBody = fs.readFileSync(request.documentPath, "utf8");
-  const relativePath = path.relative(request.cwd, request.documentPath) || path.basename(request.documentPath);
-  const prompt = buildDocumentReviewPrompt({
-    noun: request.noun,
-    documentPath: relativePath,
-    documentBody,
-    focusText: request.focusText
-  });
-
-  const result = await runAppServerTurn(request.cwd, {
-    prompt,
-    model: request.model,
-    sandbox: DEFAULT_SANDBOX,
-    outputSchema: readOutputSchema(REVIEW_SCHEMA),
-    onProgress: request.onProgress
-  });
-  const parsed = parseStructuredOutput(result.finalMessage, {
-    status: result.status,
-    failureMessage: result.error?.message ?? result.stderr
-  });
-
-  const payload = {
-    review: request.reviewLabel,
-    document: {
-      path: relativePath,
-      kind: request.kind
-    },
-    threadId: result.threadId,
-    codex: {
-      status: result.status,
-      stderr: result.stderr,
-      stdout: result.finalMessage,
-      reasoning: result.reasoningSummary
-    },
-    result: parsed.parsed,
-    rawOutput: parsed.rawOutput,
-    parseError: parsed.parseError,
-    reasoningSummary: result.reasoningSummary
-  };
-
-  return {
-    exitStatus: result.status,
-    threadId: result.threadId,
-    turnId: result.turnId,
-    payload,
-    rendered: renderReviewResult(parsed, {
-      reviewLabel: request.reviewLabel,
-      targetLabel: relativePath,
-      reasoningSummary: result.reasoningSummary
-    }),
-    summary:
-      parsed.parsed?.summary ??
-      parsed.parseError ??
-      firstMeaningfulLine(result.finalMessage, `${request.reviewLabel} finished.`),
-    jobTitle: `Codex ${request.reviewLabel}`,
-    jobClass: "review",
-    targetLabel: relativePath
-  };
-}
-
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
   ensureCodexAvailable(request.cwd);
@@ -637,22 +364,7 @@ async function executeTaskRun(request) {
   };
 }
 
-function buildReviewJobMetadata(reviewName, target) {
-  return {
-    kind: reviewName === "Adversarial Review" ? "adversarial-review" : "review",
-    title: reviewName === "Review" ? "Codex Review" : `Codex ${reviewName}`,
-    summary: `${reviewName} ${target.label}`
-  };
-}
-
 function buildTaskRunMetadata({ prompt, resumeLast = false }) {
-  if (!resumeLast && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
-    return {
-      title: "Codex Stop Gate Review",
-      summary: "Stop-gate review of previous Claude turn"
-    };
-  }
-
   const title = resumeLast ? "Codex Resume" : "Codex Task";
   const fallbackSummary = resumeLast ? DEFAULT_CONTINUE_PROMPT : "Task";
   return {
@@ -665,11 +377,8 @@ function renderQueuedTaskLaunch(payload) {
   return `${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.\n`;
 }
 
-function getJobKindLabel(kind, jobClass) {
-  if (kind === "adversarial-review") {
-    return "adversarial-review";
-  }
-  return jobClass === "review" ? "review" : "rescue";
+function getJobKindLabel() {
+  return "rescue";
 }
 
 function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
@@ -815,172 +524,6 @@ function enqueueBackgroundTask(cwd, job, request) {
     },
     logFile
   };
-}
-
-async function handleReviewCommand(argv, config) {
-  const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "cwd"],
-    booleanOptions: ["json", "background", "wait"],
-    aliasMap: {
-      m: "model"
-    }
-  });
-
-  const cwd = resolveCommandCwd(options);
-  const workspaceRoot = resolveCommandWorkspace(options);
-  const focusText = positionals.join(" ").trim();
-  const target = resolveReviewTarget(cwd, {
-    base: options.base,
-    scope: options.scope
-  });
-
-  config.validateRequest?.(target, focusText);
-  const metadata = buildReviewJobMetadata(config.reviewName, target);
-  const job = createCompanionJob({
-    prefix: "review",
-    kind: metadata.kind,
-    title: metadata.title,
-    workspaceRoot,
-    jobClass: "review",
-    summary: metadata.summary
-  });
-  await runForegroundCommand(
-    job,
-    (progress) =>
-      executeReviewRun({
-        cwd,
-        base: options.base,
-        scope: options.scope,
-        model: options.model,
-        focusText,
-        reviewName: config.reviewName,
-        onProgress: progress
-      }),
-    { json: options.json }
-  );
-}
-
-async function handleReview(argv) {
-  return handleReviewCommand(argv, {
-    reviewName: "Review",
-    validateRequest: validateNativeReviewRequest
-  });
-}
-
-function readJsonArgument(cwd, value, label) {
-  const resolved = path.resolve(cwd, value);
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`${label} not found: ${value}`);
-  }
-  try {
-    return JSON.parse(fs.readFileSync(resolved, "utf8"));
-  } catch (error) {
-    throw new Error(`${label} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Decides whether a review loop may stop. Kept in code rather than in skill
- * prose so the severity mapping and the loop's exit conditions are testable.
- * Exits non-zero on malformed input, so a broken pipeline never reads as clean.
- */
-function handleReviewGate(argv) {
-  const { options } = parseCommandInput(argv, {
-    valueOptions: [
-      "findings",
-      "verifications",
-      "iteration",
-      "max-iterations",
-      "previous-blocking",
-      "suite-status",
-      "cwd"
-    ],
-    booleanOptions: ["json"]
-  });
-
-  if (!options.findings) {
-    throw new Error("Provide the review findings with --findings <path>.");
-  }
-
-  const cwd = resolveCommandCwd(options);
-  const rawFindings = readJsonArgument(cwd, options.findings, "Findings file");
-  // Accept either a bare findings array or a whole review payload.
-  const findings = Array.isArray(rawFindings)
-    ? rawFindings
-    : rawFindings?.result?.findings ?? rawFindings?.findings;
-  if (!Array.isArray(findings)) {
-    throw new Error("Findings file must contain a findings array, or a review payload with result.findings.");
-  }
-
-  const verifications = options.verifications
-    ? readJsonArgument(cwd, options.verifications, "Verifications file")
-    : {};
-  const previousBlocking = options["previous-blocking"]
-    ? readJsonArgument(cwd, options["previous-blocking"], "Previous blocking file")
-    : undefined;
-
-  const suiteStatus = options["suite-status"];
-  if (suiteStatus && !["pass", "fail", "unknown"].includes(String(suiteStatus).toLowerCase())) {
-    throw new Error("--suite-status must be one of: pass, fail, unknown.");
-  }
-
-  const gate = summarizeGate(findings, verifications, {
-    iteration: options.iteration ? Number(options.iteration) : 1,
-    maxIterations: options["max-iterations"] ? Number(options["max-iterations"]) : undefined,
-    previousBlocking,
-    suiteStatus
-  });
-
-  outputCommandResult(gate, renderReviewGate(gate), options.json);
-}
-
-async function handleReviewDoc(argv) {
-  const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["file", "kind", "model", "cwd"],
-    booleanOptions: ["json", "background", "wait"],
-    aliasMap: {
-      f: "file",
-      m: "model"
-    }
-  });
-
-  if (!options.file) {
-    throw new Error("Provide the document to review with --file <path>.");
-  }
-
-  const cwd = resolveCommandCwd(options);
-  const workspaceRoot = resolveCommandWorkspace(options);
-  const { label: reviewLabel, noun } = resolveDocumentReviewKind(options.kind);
-  const documentPath = path.resolve(cwd, options.file);
-  if (!fs.existsSync(documentPath)) {
-    throw new Error(`Document not found: ${options.file}`);
-  }
-
-  const focusText = positionals.join(" ").trim();
-  const job = createCompanionJob({
-    prefix: "review",
-    kind: "review-doc",
-    title: `Codex ${reviewLabel}`,
-    workspaceRoot,
-    jobClass: "review",
-    summary: `${reviewLabel} ${path.relative(cwd, documentPath) || options.file}`
-  });
-
-  await runForegroundCommand(
-    job,
-    (progress) =>
-      executeDocReviewRun({
-        cwd,
-        documentPath,
-        kind: String(options.kind ?? "spec").trim().toLowerCase(),
-        reviewLabel,
-        noun,
-        model: options.model,
-        focusText,
-        onProgress: progress
-      }),
-    { json: options.json }
-  );
 }
 
 async function handleTask(argv) {
@@ -1255,20 +798,6 @@ async function main() {
   switch (subcommand) {
     case "setup":
       await handleSetup(argv);
-      break;
-    case "review":
-      await handleReview(argv);
-      break;
-    case "adversarial-review":
-      await handleReviewCommand(argv, {
-        reviewName: "Adversarial Review"
-      });
-      break;
-    case "review-doc":
-      await handleReviewDoc(argv);
-      break;
-    case "review-gate":
-      handleReviewGate(argv);
       break;
     case "task":
       await handleTask(argv);

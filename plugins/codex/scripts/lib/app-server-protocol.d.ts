@@ -8,9 +8,6 @@ import type {
 import type {
   ExternalAgentConfigImportParams,
   ExternalAgentConfigImportResponse,
-  ReviewStartParams,
-  ReviewStartResponse,
-  ReviewTarget,
   SandboxMode,
   Thread,
   ThreadItem,
@@ -35,7 +32,6 @@ export type {
   InitializeCapabilities,
   InitializeParams,
   InitializeResponse,
-  ReviewTarget,
   SandboxMode,
   Thread,
   ThreadItem,
@@ -65,7 +61,6 @@ export interface AppServerMethodMap {
   "thread/resume": { params: ThreadResumeParams; result: ThreadResumeResponse };
   "thread/name/set": { params: ThreadSetNameParams; result: ThreadSetNameResponse };
   "thread/list": { params: ThreadListParams; result: ThreadListResponse };
-  "review/start": { params: ReviewStartParams; result: ReviewStartResponse };
   "turn/start": { params: TurnStartParams; result: TurnStartResponse };
   "turn/interrupt": { params: TurnInterruptParams; result: TurnInterruptResponse };
 }
